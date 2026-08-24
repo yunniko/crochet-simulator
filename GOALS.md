@@ -52,7 +52,7 @@ sign-off before M1 starts):
       planar constraint (2D/3D construction-space modes, deferred — see
       `docs/crochet-context.md` §6a) rather than assuming unconstrained-3D
       is the only mode it will ever run in.
-- [ ] M3 — Geometry validation: self-intersection / collision detection
+- [x] M3 — Geometry validation: self-intersection / collision detection
       on the *relaxed* yarn path (thread-vs-thread proximity in 3D, not
       just visual/projected overlap), correctly distinguishing legitimate
       crossings (post stitches etc.) from real self-intersection. Also
@@ -81,6 +81,24 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-24 — **M3 done.** Added `core/src/path.rs` (reconstructs each
+  thread's complete relaxed yarn path, including the "bridge" segment
+  between consecutive stitches whenever they don't already coincide — a
+  gap M1/M2 never modelled explicitly) and `core/src/validate.rs`
+  (`check_self_intersections` + `check_round`, the `(N sts)` self-check).
+  Also added a real depth offset for front/back post stitches in
+  `geometry.rs`, so a post stitch's path genuinely doesn't occupy the
+  same space as what it reaches past — no special-casing needed in the
+  checker itself. The adjacency rule (what counts as "expected to touch,
+  not a collision") took two wrong attempts before landing on a 1-hop
+  neighbourhood-overlap rule — full account in `HANDOVER.md`, worth
+  reading before touching this code again. Verified against: an ordinary
+  multi-row swatch (no false positives), the milestone's required
+  front-post-stitch case (no false positive), and a deliberately
+  engineered bad case — two unrelated stitches pinned to the same point —
+  correctly flagged. 30 unit tests total, clean under clippy, fmt
+  applied. Next: M4 (WASM bridge + minimal viewer) — first milestone
+  touching `web/`/TypeScript.
 - 2026-08-24 — **M2 done.** Added `core/src/relax.rs`: a mass-spring
   relaxation solver over the M1 insertion graph. Every insertion-target
   edge and every working-order continuity edge (new — the physical yarn

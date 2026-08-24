@@ -50,9 +50,58 @@ length 3) than the same pull applied to a `tr` row (1.70) or a `dtr` row
 passing. 22 unit tests total (was 17 after M1), clean under
 `cargo clippy --all-targets`, `cargo fmt` applied.
 
-Not started: M3 (self-intersection/geometry validation) onward. Goal
-G-001's 6-milestone plan is in `GOALS.md`, approved by the Owner
-2026-08-24.
+**M3 done (2026-08-24).** Two new modules:
+- `core/src/path.rs` — reconstructs each thread's *complete* relaxed yarn
+  path: every stitch's own base-to-top sub-path, plus a "bridge" segment
+  connecting consecutive stitches in working order whenever their
+  positions don't already coincide (the physical strand between them —
+  new in M3; M1/M2 never modelled this gap explicitly). Also: added
+  `POST_DEPTH_OFFSET` to `geometry.rs`'s placement, so a front/back post
+  stitch's base carries a real depth offset — this is what makes a post
+  stitch's path genuinely not occupy the same 3D space as the stitch(es)
+  it reaches past, rather than requiring the checker to special-case it.
+- `core/src/validate.rs` — `check_self_intersections`: flags any two
+  non-adjacent segments closer than a yarn-diameter threshold
+  (`DEFAULT_YARN_DIAMETER = 0.15`, smaller than `POST_DEPTH_OFFSET = 0.4`
+  on purpose). Also `check_round`: the programmatic `(N sts)` self-check
+  (docs §7/§8 invariant 3), generalised for a model with no real row
+  objects — the caller names the previous/new round's stitch refs
+  explicitly and it checks count + that every new stitch's target(s)
+  actually lie in the claimed previous round.
+
+**The adjacency problem was harder than expected and worth recording.**
+First attempt: exclude segment pairs sharing a literal `StitchRef`. Wrong
+— missed that plain positionally-consecutive segments (e.g. two chain
+links) touch without sharing a ref. Second attempt: also link a
+zero-target stitch with its working-order predecessor. Wrong the other
+way — this also (correctly only for zero-target stitches, but the bug was
+applying it more broadly during iteration) risked hiding genuine
+collisions between stitches that merely happen to be consecutive but
+place their geometry from *different* targets. Landed on: each stitch has
+a **1-hop neighbourhood** (itself, its target(s), and — only when it has
+no targets — its immediate predecessor), and two segments are adjacent
+iff their owning stitches' neighbourhoods *overlap* (not identical, not
+full transitive closure — deliberately just one hop, since a naive full
+transitive closure over the graph eventually connects everything through
+the working-order backbone and would hide real collisions). Verified this
+distinction with a deliberately-engineered bad case: two *unrelated*
+stitches (different targets, no shared neighbourhood) pinned to the exact
+same relaxed position — correctly flagged, while an ordinary swatch and a
+front-post-stitch case (the milestone's required non-false-positive test)
+both correctly pass. Also had to fix an unrealistic test-scheme detail
+along the way: rows must target the row below in *reverse* order (real
+crochet turns at the end of each row) — same-direction targeting created
+a pathological bridge running the full width of the previous row.
+
+30 unit tests total (was 22), clean under `cargo clippy --all-targets`,
+`cargo fmt` applied. Known, documented limitation (not an oversight): the
+1-hop neighbourhood rule is deliberately permissive — it will not catch
+every conceivable true self-intersection between structurally-adjacent
+stitches, favouring zero false positives (the milestone's explicit
+priority) over exhaustive true-positive detection.
+
+Not started: M4 (WASM bridge + minimal viewer) onward. Goal G-001's
+6-milestone plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 
 ## Decision record
 
@@ -107,10 +156,11 @@ Not yet built. Planned shape (subject to revision as M1 proceeds):
   order + insertion-target edges — see `docs/crochet-context.md` §4,
   `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), raw
   placement geometry (`geometry.rs`, M1), a mass-spring relaxation/
-  elasticity solve (§6, `relax.rs`, M2 — done), and self-intersection/
-  geometry validation on the relaxed shape (§8, not yet built, M3). Pure
-  Rust, unit-testable without any UI, compiled to WASM (`wasm-bindgen`) for
-  the browser eventually (M4).
+  elasticity solve (§6, `relax.rs`, M2), continuous relaxed-path
+  reconstruction (`path.rs`, M3), and self-intersection/count validation
+  on that path (§8, `validate.rs`, M3 — all done). Pure Rust,
+  unit-testable without any UI, compiled to WASM (`wasm-bindgen`) for the
+  browser eventually (M4).
 - `web/` — Next.js/TypeScript app: scheme editor UI + a 3D viewport
   (likely three.js / react-three-fiber) that calls into the WASM core and
   renders its output, highlighting any flagged geometry problems. The
@@ -118,12 +168,14 @@ Not yet built. Planned shape (subject to revision as M1 proceeds):
 
 ## Next steps
 
-M3 (geometry validation): self-intersection / collision detection on the
-*relaxed* (M2) yarn path, correctly distinguishing legitimate crossings
-(post stitches, §8 invariant 4) from real self-intersection — flagged in
-`docs/crochet-context.md` as the trickiest part of this milestone. Also
-cross-check the graph-derived stitch count against pattern-style `(N sts)`
-expectations (§7/§8 invariant 3). No validation code exists yet.
+M4 (WASM bridge + minimal viewer): compile `core` to WASM
+(`wasm-bindgen`), wire it into a minimal Next.js/TS app with a 3D
+viewport (three.js / react-three-fiber) rendering a hardcoded sample
+scheme end-to-end in the browser — the *relaxed* (M2) shape, with a
+visible flag when M3's validator detects a problem. This is the first
+milestone that touches `web/` / TypeScript at all; nothing exists there
+yet. Per `docs/crochet-context.md` §6a, don't build the viewport in a way
+that assumes unconstrained-3D-only.
 
 ## Domain reference
 

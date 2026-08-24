@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use crate::graph::{Scheme, StitchRef};
+use crate::graph::{LoopTarget, Scheme, StitchRef};
 use crate::stitch::{StitchId, StitchRegistry};
 use crate::vec3::Vec3;
 
@@ -15,6 +15,15 @@ const CHAIN_STEP_X: f64 = 1.0;
 /// Lateral spread applied to each additional stitch sharing a target
 /// (an increase), purely so siblings don't all land on the same point.
 const INCREASE_SPREAD_X: f64 = 0.3;
+/// Depth offset applied to a front/back post stitch's base, along the
+/// axis orthogonal to both the lateral (x) and height (z) axes. A post
+/// stitch reaches around an earlier stitch's post instead of inserting
+/// into its top loops (docs §2), so its yarn path genuinely does not
+/// occupy the same space as the stitch(es) it reaches past — this is
+/// what lets M3's self-intersection checker treat it correctly as *not*
+/// a collision without needing to special-case "is this a post stitch."
+/// Larger than `crate::validate::DEFAULT_YARN_DIAMETER` on purpose.
+const POST_DEPTH_OFFSET: f64 = 0.4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlacementError {
@@ -83,8 +92,16 @@ pub fn place_scheme(
                         .top;
                     let sibling_index = *increase_use_count.get(single).unwrap_or(&0);
                     increase_use_count.insert(*single, sibling_index + 1);
-                    let base =
-                        target_top + Vec3::new(sibling_index as f64 * INCREASE_SPREAD_X, 0.0, 0.0);
+                    let depth_offset = match stitch.loop_target {
+                        LoopTarget::FrontPost => Vec3::new(0.0, POST_DEPTH_OFFSET, 0.0),
+                        LoopTarget::BackPost => Vec3::new(0.0, -POST_DEPTH_OFFSET, 0.0),
+                        LoopTarget::Both | LoopTarget::FrontOnly | LoopTarget::BackOnly => {
+                            Vec3::ZERO
+                        }
+                    };
+                    let base = target_top
+                        + Vec3::new(sibling_index as f64 * INCREASE_SPREAD_X, 0.0, 0.0)
+                        + depth_offset;
                     let top = base + Vec3::new(0.0, 0.0, def.height());
                     (base, top)
                 }
