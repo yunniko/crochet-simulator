@@ -28,8 +28,31 @@ spike stitch (target further back than the immediate predecessor), a
 fully non-row freeform scheme, and a not-yet-placed-target error path.
 `cargo clippy --all-targets` is clean; `cargo fmt --all` applied.
 
-Not started: M2 (elasticity/relaxation) onward. Goal G-001's 6-milestone
-plan is in `GOALS.md`, approved by the Owner 2026-08-24.
+**M2 done (2026-08-24).** `core/src/relax.rs`: a mass-spring relaxation
+solver over the same insertion graph. Every insertion-target edge and
+every working-order continuity edge (consecutive stitches in a thread —
+new in M2, not present in M1's placement) becomes a Hookean spring
+(`force = stiffness * (distance - rest_length) * direction`), integrated
+with damped semi-implicit Euler to a settled equilibrium. Stiffness comes
+from a new `StitchDef::insertion_stiffness()` (§6: dc stiff/low-give,
+htr/tr/dtr/... progressively softer, `ch` loosest) — elasticity is
+entirely a consequence of stitch kind, no separate material parameter
+anywhere in the solver. `RelaxationParams.pinned` lets a caller hold
+specific stitches at fixed (possibly displaced) positions — this is both
+"hold an edge" and "apply a stretch," the same mechanism.
+
+Verified: a swatch already at its M1 rest state barely moves under
+relaxation (sanity/idempotency); pinned stitches stay exactly put; and —
+the actual M2 deliverable — pulling the last stitch of a `dc` row sideways
+drags its free neighbour noticeably less (1.42 units, under a pull of
+length 3) than the same pull applied to a `tr` row (1.70) or a `dtr` row
+(1.76), confirmed by inspecting real numbers, not just an assertion
+passing. 22 unit tests total (was 17 after M1), clean under
+`cargo clippy --all-targets`, `cargo fmt` applied.
+
+Not started: M3 (self-intersection/geometry validation) onward. Goal
+G-001's 6-milestone plan is in `GOALS.md`, approved by the Owner
+2026-08-24.
 
 ## Decision record
 
@@ -81,11 +104,13 @@ step would.
 
 Not yet built. Planned shape (subject to revision as M1 proceeds):
 - `core/` — Rust crate: an **insertion graph** of stitch instances (working
-  order + insertion-target edges — see `docs/crochet-context.md` §4), an
-  extensible stitch registry (§3a), a relaxation/elasticity solve (§6), and
-  self-intersection/geometry validation on the relaxed shape (§8). Pure
+  order + insertion-target edges — see `docs/crochet-context.md` §4,
+  `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), raw
+  placement geometry (`geometry.rs`, M1), a mass-spring relaxation/
+  elasticity solve (§6, `relax.rs`, M2 — done), and self-intersection/
+  geometry validation on the relaxed shape (§8, not yet built, M3). Pure
   Rust, unit-testable without any UI, compiled to WASM (`wasm-bindgen`) for
-  the browser.
+  the browser eventually (M4).
 - `web/` — Next.js/TypeScript app: scheme editor UI + a 3D viewport
   (likely three.js / react-three-fiber) that calls into the WASM core and
   renders its output, highlighting any flagged geometry problems. The
@@ -93,13 +118,12 @@ Not yet built. Planned shape (subject to revision as M1 proceeds):
 
 ## Next steps
 
-M2 (elasticity/relaxation): design the topology-driven relaxation solve
-described in `docs/crochet-context.md` §6 — each insertion-target edge as
-a constraint with some give rather than a rigid offset, settling M1's raw
-placement into a physically plausible shape and re-solving under an
-applied stretch. Keep §6a's forward-compat note in mind (don't hard-code
-unconstrained-3D-only). No relaxation code exists yet; M1's `geometry.rs`
-is intentionally naive placement only.
+M3 (geometry validation): self-intersection / collision detection on the
+*relaxed* (M2) yarn path, correctly distinguishing legitimate crossings
+(post stitches, §8 invariant 4) from real self-intersection — flagged in
+`docs/crochet-context.md` as the trickiest part of this milestone. Also
+cross-check the graph-derived stitch count against pattern-style `(N sts)`
+expectations (§7/§8 invariant 3). No validation code exists yet.
 
 ## Domain reference
 

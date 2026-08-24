@@ -41,7 +41,7 @@ sign-off before M1 starts):
       it with one thread — multi-thread schemes/joins are deferred (see
       `docs/crochet-context.md` §4a) but must be additive later, not a
       restructuring.
-- [ ] M2 — Elasticity/relaxation: a topology-driven relaxation solve over
+- [x] M2 — Elasticity/relaxation: a topology-driven relaxation solve over
       the insertion graph (each insertion-target edge as a constraint with
       some give, not a rigid offset) that settles raw M1 placement into a
       physically plausible relaxed shape, and can re-solve under an
@@ -81,6 +81,23 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-24 — **M2 done.** Added `core/src/relax.rs`: a mass-spring
+  relaxation solver over the M1 insertion graph. Every insertion-target
+  edge and every working-order continuity edge (new — the physical yarn
+  strand between consecutive stitches in a thread) is a Hookean spring;
+  stiffness comes from a new `StitchDef::insertion_stiffness()` (dc
+  stiffest, taller/open stitches progressively softer, `ch` loosest) so
+  elasticity is purely a function of stitch kind, per the Owner's original
+  instruction. `RelaxationParams.pinned` provides both "hold an edge" and
+  "apply a stretch" via the same mechanism. Verified: an already-rest
+  swatch barely moves (idempotency), pinned positions hold exactly, and —
+  the real deliverable — pulling a `dc` row's last stitch drags its free
+  neighbour markedly less (1.42 units under a pull of length 3) than the
+  same pull on `tr` (1.70) or `dtr` (1.76), checked against actual printed
+  numbers, not just a passing assertion. 22 unit tests total, clean under
+  clippy, fmt applied. Solver works on plain `Vec3` positions with no
+  z-axis special-casing, so it doesn't foreclose the deferred §6a planar
+  constraint. Next: M3 (geometry validation).
 - 2026-08-24 — **M1 done.** Built `core/` (Rust, Cargo workspace at repo
   root) implementing the insertion graph: `stitch.rs` (open registry
   seeded with the basic UK ladder), `graph.rs` (`Scheme` = `Vec<Thread>`

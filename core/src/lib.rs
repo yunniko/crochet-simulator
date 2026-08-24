@@ -7,5 +7,6 @@
 
 pub mod geometry;
 pub mod graph;
+pub mod relax;
 pub mod stitch;
 pub mod vec3;

@@ -14,10 +14,13 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1 (core data model) done: a Rust crate (`core/`) implementing the
-insertion-graph engine — stitch registry, working-order thread(s), raw 3D
-placement geometry. No relaxation/elasticity, validation, WASM bridge, or
-UI yet — see `GOALS.md` → G-001 for the milestone plan and progress log.
+M1 (core data model) and M2 (elasticity/relaxation) done: a Rust crate
+(`core/`) implementing the insertion-graph engine — stitch registry,
+working-order thread(s), raw 3D placement geometry, and a mass-spring
+relaxation solve where stitch topology (not a separate material property)
+determines how stretchy the fabric is. No self-intersection validation,
+WASM bridge, or UI yet — see `GOALS.md` → G-001 for the milestone plan and
+progress log.
 
 ## Run locally
 

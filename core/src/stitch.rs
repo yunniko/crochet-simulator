@@ -75,6 +75,28 @@ impl StitchDef {
         }
     }
 
+    /// How stiffly this stitch resists its insertion point(s) deviating
+    /// from rest length — see docs/crochet-context.md §6: elasticity is a
+    /// property of stitch topology, not a separate yarn-material number.
+    /// Dense, short-draw-through stitches are stiff (low give); tall,
+    /// multi-stage stitches are soft (more give); `ch` is the loosest
+    /// connection of all. Values are relative (used as spring constants
+    /// in `crate::relax`), not calibrated to any physical unit.
+    pub fn insertion_stiffness(&self) -> f64 {
+        if !self.has_insertion {
+            return 0.15; // ch
+        }
+        match self.draw_through {
+            DrawThrough::SlipClear => 0.9, // ss: cinches tight, minimal give
+            DrawThrough::Single => 0.8,    // dc: dense, low give
+            DrawThrough::AllAtOnce => 0.5, // htr: medium
+            DrawThrough::Repeated2 => {
+                // tr and taller: more pre-wraps -> looser insertion, more give.
+                (0.5 - 0.08 * self.pre_wraps as f64).max(0.1)
+            }
+        }
+    }
+
     /// Number of points along this stitch's own yarn path, used to give a
     /// taller stitch a proportionally more subdivided path (§3: more
     /// pre-wraps -> more yarn held vertically before the first
@@ -212,6 +234,25 @@ mod tests {
         assert_ne!(htr.draw_through, tr.draw_through);
         // htr's single all-at-once draw-through makes it shorter than tr's.
         assert!(htr.height() < tr.height());
+    }
+
+    #[test]
+    fn insertion_stiffness_decreases_as_stitches_get_taller() {
+        let reg = StitchRegistry::with_uk_basics();
+        let stiffnesses: Vec<f64> = [DC, HTR, TR, DTR, TRTR, QUAD_TR]
+            .iter()
+            .map(|id| reg.get(*id).unwrap().insertion_stiffness())
+            .collect();
+        for pair in stiffnesses.windows(2) {
+            assert!(
+                pair[1] < pair[0],
+                "expected strictly decreasing stiffness (more give as stitches get taller): {:?}",
+                stiffnesses
+            );
+        }
+        // ch is the loosest connection of all.
+        let ch_stiffness = reg.get(CH).unwrap().insertion_stiffness();
+        assert!(ch_stiffness < *stiffnesses.last().unwrap());
     }
 
     #[test]
