@@ -5,6 +5,12 @@
 //! don't already coincide (ordinary same-target rows), not just each
 //! stitch's own base-to-top sub-path. This is what M3's self-intersection
 //! checker (`crate::validate`) actually tests against.
+//!
+//! Every segment also carries its **raw** (M1, pre-relaxation,
+//! pre-pinning) start/end alongside its relaxed one. `crate::validate`
+//! uses the raw pair to decide whether two segments are structurally "the
+//! same point" (see that module's docs for why raw coordinates, not
+//! relaxed ones, are the right thing to compare).
 
 use crate::geometry::{place_scheme, PlacementError};
 use crate::graph::{Scheme, StitchRef};
@@ -27,6 +33,10 @@ pub enum SegmentOwner {
 pub struct PathSegment {
     pub start: Vec3,
     pub end: Vec3,
+    /// This segment's endpoints in the raw (M1) placement — see module
+    /// docs and `crate::validate`.
+    pub raw_start: Vec3,
+    pub raw_end: Vec3,
     pub owner: SegmentOwner,
 }
 
@@ -44,7 +54,7 @@ pub fn relaxed_yarn_segments(
     let mut segments = Vec::new();
 
     for (thread_idx, thread) in scheme.threads.iter().enumerate() {
-        let mut prev: Option<(StitchRef, Vec3)> = None;
+        let mut prev: Option<(StitchRef, Vec3, Vec3)> = None; // (ref, relaxed top, raw top)
 
         for (i, stitch) in thread.stitches.iter().enumerate() {
             let r = StitchRef::new(thread_idx, i);
@@ -57,7 +67,7 @@ pub fn relaxed_yarn_segments(
                 .expect("relaxed position missing for a stitch from the same scheme");
 
             let relaxed_base = match stitch.targets.as_slice() {
-                [] => prev.map(|(_, top)| top).unwrap_or(Vec3::ZERO),
+                [] => prev.map(|(_, top, _)| top).unwrap_or(Vec3::ZERO),
                 [single] => {
                     let raw_target_top = raw.threads[single.thread][single.index].top;
                     let relaxed_target_top = relaxed
@@ -80,11 +90,13 @@ pub fn relaxed_yarn_segments(
                 }
             };
 
-            if let Some((prev_ref, prev_top)) = prev {
-                if prev_top.distance(&relaxed_base) > BRIDGE_EPSILON {
+            if let Some((prev_ref, prev_relaxed_top, prev_raw_top)) = prev {
+                if prev_relaxed_top.distance(&relaxed_base) > BRIDGE_EPSILON {
                     segments.push(PathSegment {
-                        start: prev_top,
+                        start: prev_relaxed_top,
                         end: relaxed_base,
+                        raw_start: prev_raw_top,
+                        raw_end: raw_stitch.base,
                         owner: SegmentOwner::Bridge(prev_ref, r),
                     });
                 }
@@ -94,15 +106,17 @@ pub fn relaxed_yarn_segments(
             let points: Vec<Vec3> = (0..=n)
                 .map(|k| relaxed_base + (relaxed_top - relaxed_base) * (k as f64 / n as f64))
                 .collect();
-            for w in points.windows(2) {
+            for (w, raw_w) in points.windows(2).zip(raw_stitch.path.windows(2)) {
                 segments.push(PathSegment {
                     start: w[0],
                     end: w[1],
+                    raw_start: raw_w[0],
+                    raw_end: raw_w[1],
                     owner: SegmentOwner::Stitch(r),
                 });
             }
 
-            prev = Some((r, relaxed_top));
+            prev = Some((r, relaxed_top, raw_stitch.top));
         }
     }
 
@@ -137,6 +151,7 @@ mod tests {
         assert!(!segments.is_empty());
         for s in &segments {
             assert!(s.start.is_finite() && s.end.is_finite());
+            assert!(s.raw_start.is_finite() && s.raw_end.is_finite());
         }
     }
 }

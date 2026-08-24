@@ -14,7 +14,18 @@ use crate::vec3::Vec3;
 const CHAIN_STEP_X: f64 = 1.0;
 /// Lateral spread applied to each additional stitch sharing a target
 /// (an increase), purely so siblings don't all land on the same point.
-const INCREASE_SPREAD_X: f64 = 0.3;
+/// 0.5, not something smaller: for any stitch taller than `dc` (more than
+/// one own-path sub-segment — see `StitchDef::path_segments`), a sibling's
+/// *lower* sub-segment passes close to the bridge connecting it to the
+/// *next* sibling, at roughly half this spread — empirically, 0.3 put
+/// that near-miss right under `crate::validate::DEFAULT_YARN_DIAMETER`
+/// (a false positive on an entirely ordinary 2-stitch increase in `tr`
+/// or taller). 0.5 clears it with margin. See `crate::validate` module
+/// docs for the fuller picture, including a *deeper*, not-yet-fixed
+/// limitation this does not solve: wide multi-way shares (roughly 5+
+/// stitches into one point) can still fold onto themselves during
+/// relaxation, independent of this constant.
+const INCREASE_SPREAD_X: f64 = 0.5;
 /// Depth offset applied to a front/back post stitch's base, along the
 /// axis orthogonal to both the lateral (x) and height (z) axes. A post
 /// stitch reaches around an earlier stitch's post instead of inserting

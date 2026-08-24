@@ -81,6 +81,24 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-24 — Owner asked whether lace (many stitches sharing one
+  insertion point) validates correctly — it didn't, fully. Found and
+  fixed a real bug: M3's adjacency rule excluded *any* two stitches
+  sharing a target from checking against each other entirely, not just
+  against the shared target — confirmed this let shell siblings pinned
+  ~0.01 apart pass silently. Replaced with a raw-placement point-
+  coincidence rule (`path.rs` now carries raw endpoints alongside relaxed
+  ones). Also found and fixed a second, more basic issue this surfaced:
+  `INCREASE_SPREAD_X` (0.3) was too small for *any* stitch taller than
+  `dc` sharing a target with a sibling — an ordinary 2-stitch increase,
+  not lace-specific — putting it right at the edge of the yarn-diameter
+  threshold; raised to 0.5. **Still open, not fixed**: wide multi-way
+  shares (~5+ stitches into one point, common in lace shells) can fold
+  onto themselves during M2's relaxation, since the spring model has no
+  bending/repulsion resistance — M3 correctly flags the resulting
+  overlap, but this means wide shells don't validate cleanly yet. Full
+  account in `HANDOVER.md`. 32 unit tests total, clean under clippy, fmt
+  applied.
 - 2026-08-24 — **M3 done.** Added `core/src/path.rs` (reconstructs each
   thread's complete relaxed yarn path, including the "bridge" segment
   between consecutive stitches whenever they don't already coincide — a

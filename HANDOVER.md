@@ -100,6 +100,59 @@ every conceivable true self-intersection between structurally-adjacent
 stitches, favouring zero false positives (the milestone's explicit
 priority) over exhaustive true-positive detection.
 
+**M3 correction (2026-08-24, prompted by an Owner question about lace).**
+Owner asked whether lace — where many stitches routinely share one
+insertion point (shells, motifs) — validates correctly. It didn't, fully.
+Investigation found two distinct problems, one fixed, one still open:
+
+1. **Fixed — adjacency was graph-topological, not geometric.** The
+   original M3 adjacency rule (a stitch-reference "neighbourhood overlap")
+   excluded *any* two stitches sharing a target from checking against each
+   other at all, not just against the shared target. Verified this let
+   two shell siblings pinned to ~0.01 apart pass silently — exactly the
+   lace case. **Replaced with raw-placement point-coincidence**: two
+   segments are adjacent iff an endpoint coincides in the *raw* (M1,
+   pre-relaxation, pre-pinning) placement — a purely geometric fact fixed
+   at raw-placement time, not something relaxation or a test's pinning
+   can accidentally satisfy or fake. `path.rs`'s `PathSegment` now carries
+   `raw_start`/`raw_end` alongside the relaxed pair for this purpose.
+   `validate.rs`'s module doc has the fuller account of why the old rule
+   was wrong and why this one isn't. Regression tests added: an ordinary
+   3-tr shell passes, the same shell with two siblings pinned together is
+   caught.
+2. **Fixed — `INCREASE_SPREAD_X` was too small for anything taller than
+   `dc`.** Investigating (1) surfaced a second, more basic problem:
+   *any* stitch with more than one own-path sub-segment (`tr` and up),
+   immediately followed by a sibling sharing its target — an entirely
+   ordinary 2-stitch increase, not lace-specific at all — put that
+   sibling's lower sub-segment right at the edge of
+   `DEFAULT_YARN_DIAMETER` from the connecting bridge (~0.148 vs. a 0.15
+   threshold, essentially by construction: the near-miss distance is
+   roughly `INCREASE_SPREAD_X / 2`). Raised `INCREASE_SPREAD_X` from 0.3
+   to 0.5 to clear it with real margin; comment in `geometry.rs` records
+   the reasoning and the arithmetic so it isn't silently dropped back to
+   0.3 later.
+3. **Still open — wide multi-way shares can fold during relaxation.**
+   Testing shells up to size 7 surfaced a *deeper* issue, present even
+   before today's changes and unrelated to `INCREASE_SPREAD_X`: with
+   ~5+ stitches sharing one target, M2's relaxation solver has no
+   bending/repulsion resistance keeping the fan of siblings from curling
+   onto itself — confirmed non-adjacent siblings (e.g. index 6 vs index 7
+   in a 7-`dc` shell) can end up essentially coincident (~1e-16 apart)
+   after 150 relaxation steps. M3 correctly flags the resulting overlap
+   (it's a real one), but a design tool that can't validate a 5+ stitch
+   shell without a false alarm is a real gap for lace specifically, where
+   wide shells are common. **Not fixed in this session** — would mean
+   adding an angular/bending term or an explicit same-target repulsion to
+   M2's spring model, which is a real (if bounded) design task, not a
+   tweak. Flagged to the Owner; revisit as its own piece of work if lace
+   support is a near-term priority, otherwise it's fair to leave as a
+   known limitation for now (documented here and in `validate.rs`'s
+   module doc so it isn't rediscovered from scratch).
+
+32 unit tests total (was 30 immediately after M3). Clean under
+`cargo clippy --all-targets`, `cargo fmt` applied.
+
 Not started: M4 (WASM bridge + minimal viewer) onward. Goal G-001's
 6-milestone plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 

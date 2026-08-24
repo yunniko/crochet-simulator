@@ -5,18 +5,35 @@
 //! (`crate::path`), not the raw M1 placement — docs §8 invariant 4 is
 //! explicit that it's the relaxed shape that must be checked. It flags
 //! any two non-adjacent segments whose closest approach is below a yarn-
-//! diameter threshold. "Adjacent" (never flagged) means the two segments'
-//! *1-hop neighbourhoods* overlap (see `build_neighborhoods`) — not just
-//! literally the same stitch, but anything sharing a common directly-
-//! linked point (e.g. a chain stitch and a later stitch worked into the
-//! chain stitch *before* it both legitimately touch that shared point).
-//! This is deliberately permissive around what counts as "the same
-//! connective structure" (favouring no false positives, per the
-//! milestone's explicit priority on post stitches not false-positiving,
-//! over catching every possible true positive) — a known, documented
-//! limitation, not an oversight.
+//! diameter threshold.
+//!
+//! "Adjacent" (never flagged) means the two segments share an endpoint
+//! **in the raw (M1) placement** — see `crate::path`'s `raw_start`/
+//! `raw_end`. Raw coordinates, not relaxed ones, are what should decide
+//! this: whether two points are *structurally* the same point (a chain
+//! stitch's base *is defined as* the previous stitch's top; the first
+//! stitch built on a target sits exactly *at* that target's top) is a
+//! fact about the graph, fixed at raw-placement time — not something that
+//! should change because relaxation moved things, or because a caller
+//! pinned two stitches together to test the checker.
+//!
+//! An earlier version of this checker used a stitch-reference-based
+//! "neighbourhood overlap" rule instead. It correctly handled the
+//! chain-continuity case above, but was **too permissive for lace/shell
+//! constructions**: any two stitches sharing a single target (e.g. a
+//! 7-tr shell into one chain space — completely ordinary in lace) were
+//! excluded from checking *against each other*, not just against the
+//! shared target, because both "neighbourhoods" contained that target.
+//! Verified empirically that this let two shell siblings pinned to ~0.01
+//! apart pass silently. Raw-coincidence fixes this directly: two shell
+//! siblings' raw bases differ (each gets its own lateral offset in
+//! `geometry.rs`, unless one is the sole/first user of the target, which
+//! *does* coincide and is correctly excluded) — so genuine crowding
+//! between them is checked like anything else, while each sibling's
+//! shared touch point with the target itself is still recognised as
+//! structural, not a defect.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::graph::{Scheme, StitchRef};
 use crate::path::{PathSegment, SegmentOwner};
@@ -50,31 +67,25 @@ pub fn validate_scheme(
     min_distance: f64,
 ) -> Result<IntersectionReport, crate::geometry::PlacementError> {
     let segments = crate::path::relaxed_yarn_segments(scheme, registry, relaxed)?;
-    let neighborhoods = build_neighborhoods(scheme);
-    Ok(check_self_intersections(
-        &segments,
-        &neighborhoods,
-        min_distance,
-    ))
+    Ok(check_self_intersections(&segments, min_distance))
 }
 
+/// Minimum distance between two points for them to count as "the same
+/// structural point" when compared in raw placement — see module docs.
+const SAME_POINT_EPSILON: f64 = 1e-6;
+
 /// Flags any two non-adjacent segments closer than `min_distance` as a
-/// self-intersection (docs §8 invariant 4). `neighborhoods` names, per
-/// stitch, the set of points it's expected to touch by construction (see
-/// `build_neighborhoods`); two segments are never flagged against each
-/// other if any of their owning stitches' neighbourhoods overlap.
+/// self-intersection (docs §8 invariant 4). Two segments are "adjacent"
+/// (never flagged) when they share an endpoint in *raw* placement — see
+/// module docs for why raw, not relaxed, coordinates decide this.
 /// O(n^2) over segment count — fine for design-tool-sized swatches; a
 /// spatial hash would be the first thing to add if this ever needs to
 /// scale to large schemes.
-pub fn check_self_intersections(
-    segments: &[PathSegment],
-    neighborhoods: &HashMap<StitchRef, HashSet<StitchRef>>,
-    min_distance: f64,
-) -> IntersectionReport {
+pub fn check_self_intersections(segments: &[PathSegment], min_distance: f64) -> IntersectionReport {
     let mut violations = Vec::new();
     for i in 0..segments.len() {
         for j in (i + 1)..segments.len() {
-            if segments_are_adjacent(&segments[i], &segments[j], neighborhoods) {
+            if segments_are_adjacent(&segments[i], &segments[j]) {
                 continue;
             }
             let distance = segment_segment_distance(
@@ -98,71 +109,11 @@ pub fn check_self_intersections(
     }
 }
 
-/// For every stitch, the set of points it shares *by construction* — used
-/// to tell "two segments touch because they're structurally the same
-/// connection" from "two segments happen to be close, which is exactly
-/// what this checker exists to catch." A stitch's own neighbourhood is
-/// itself, plus each of its insertion target(s) (that's what an insertion
-/// point *is*: loops sharing a location on purpose), plus — only when it
-/// has *no* targets (a `ch`) — its immediate predecessor in the same
-/// thread, since a zero-target stitch's base is *defined* as the previous
-/// stitch's top (docs §4), not merely close to it.
-///
-/// Two segments are adjacent when their owning stitches' neighbourhoods
-/// *overlap* (not merely identical) — this is what correctly excludes,
-/// say, a chain stitch and a later stitch worked into the chain stitch
-/// immediately before it: both touch that earlier chain stitch's top, so
-/// their neighbourhoods share that point, even though the chain stitch
-/// and the later stitch aren't linked to each other directly. It is
-/// deliberately *not* full transitive closure over the whole graph (which
-/// would eventually connect everything through the working-order
-/// backbone) — only this one hop.
-fn build_neighborhoods(scheme: &Scheme) -> HashMap<StitchRef, HashSet<StitchRef>> {
-    let mut neighborhoods: HashMap<StitchRef, HashSet<StitchRef>> = HashMap::new();
-    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
-        for (i, stitch) in thread.stitches.iter().enumerate() {
-            let r = StitchRef::new(thread_idx, i);
-            let entry = neighborhoods.entry(r).or_default();
-            entry.insert(r);
-            for target in &stitch.targets {
-                entry.insert(*target);
-            }
-            if stitch.targets.is_empty() && i > 0 {
-                entry.insert(StitchRef::new(thread_idx, i - 1));
-            }
-        }
-    }
-    neighborhoods
-}
-
-fn owner_refs(owner: SegmentOwner) -> [Option<StitchRef>; 2] {
-    match owner {
-        SegmentOwner::Stitch(r) => [Some(r), None],
-        SegmentOwner::Bridge(a, b) => [Some(a), Some(b)],
-    }
-}
-
-fn segments_are_adjacent(
-    a: &PathSegment,
-    b: &PathSegment,
-    neighborhoods: &HashMap<StitchRef, HashSet<StitchRef>>,
-) -> bool {
-    let a_refs = owner_refs(a.owner);
-    let b_refs = owner_refs(b.owner);
-    for ra in a_refs.into_iter().flatten() {
-        let Some(na) = neighborhoods.get(&ra) else {
-            continue;
-        };
-        for rb in b_refs.into_iter().flatten() {
-            let Some(nb) = neighborhoods.get(&rb) else {
-                continue;
-            };
-            if !na.is_disjoint(nb) {
-                return true;
-            }
-        }
-    }
-    false
+fn segments_are_adjacent(a: &PathSegment, b: &PathSegment) -> bool {
+    a.raw_start.distance(&b.raw_start) < SAME_POINT_EPSILON
+        || a.raw_start.distance(&b.raw_end) < SAME_POINT_EPSILON
+        || a.raw_end.distance(&b.raw_start) < SAME_POINT_EPSILON
+        || a.raw_end.distance(&b.raw_end) < SAME_POINT_EPSILON
 }
 
 /// Shortest distance between two 3D line segments [p1,q1] and [p2,q2].
@@ -266,6 +217,73 @@ mod tests {
 
     fn ref_at(index: usize) -> StitchRef {
         StitchRef::new(0, index)
+    }
+
+    #[test]
+    fn small_shell_of_taller_stitches_does_not_false_positive() {
+        // A 3-tr shell all worked into one chain-space stitch — the
+        // ordinary/common case in lace and general shaping (docs §5:
+        // "multiple stitches share the same insertion target"). Every
+        // sibling legitimately touches the shared target; none should be
+        // flagged against it or against each other under ordinary
+        // (non-adversarial) relaxation.
+        let registry = crate::stitch::StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![])); // 0: chain-space anchor
+        for _ in 0..3 {
+            thread
+                .stitches
+                .push(StitchInstance::new(TR, vec![ref_at(0)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+        let report = validate_scheme(&scheme, &registry, &relaxed, DEFAULT_YARN_DIAMETER).unwrap();
+        assert!(
+            report.ok,
+            "unexpected self-intersections in an ordinary 3-tr shell: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn shell_siblings_squeezed_together_are_still_caught() {
+        // Regression guard: an earlier version of this checker excluded
+        // *any* two stitches sharing a target from checking against each
+        // other (not just against the target), which silently passed two
+        // shell siblings forced to ~0.01 apart. Two genuinely distinct
+        // loops that end up that close — whether via heavy relaxation or,
+        // as here, a deliberately engineered squeeze — must still be
+        // flagged; sharing a target only excuses touching *the target*,
+        // not each other.
+        let registry = crate::stitch::StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![])); // 0: chain-space anchor
+        for _ in 0..3 {
+            thread
+                .stitches
+                .push(StitchInstance::new(TR, vec![ref_at(0)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let raw = crate::geometry::place_scheme(&scheme, &registry).unwrap();
+        let squeeze_point = raw.threads[0][1].top;
+        let mut pinned = HashMap::new();
+        pinned.insert(ref_at(1), squeeze_point);
+        pinned.insert(ref_at(2), squeeze_point + Vec3::new(0.01, 0.0, 0.0));
+        let params = RelaxationParams {
+            pinned,
+            ..RelaxationParams::default()
+        };
+
+        let relaxed = relax_scheme(&scheme, &registry, &params).unwrap();
+        let report = validate_scheme(&scheme, &registry, &relaxed, DEFAULT_YARN_DIAMETER).unwrap();
+        assert!(
+            !report.ok,
+            "expected two shell siblings squeezed to ~0.01 apart to be flagged"
+        );
     }
 
     #[test]
