@@ -25,7 +25,7 @@
 **Milestones** (revised 2026-08-24 per Owner decisions — see
 `docs/crochet-context.md` and `HANDOVER.md` D4–D7; proposed, pending Owner
 sign-off before M1 starts):
-- [ ] M1 — Core data model: Rust crate implementing the **insertion graph**
+- [x] M1 — Core data model: Rust crate implementing the **insertion graph**
       (working-order stitch sequence + insertion-target edges — not
       rows/rounds as structural objects) and an **extensible stitch
       registry** seeded with the basic UK ladder (ch, ss, dc, htr, tr, dtr,
@@ -81,6 +81,18 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-24 — **M1 done.** Built `core/` (Rust, Cargo workspace at repo
+  root) implementing the insertion graph: `stitch.rs` (open registry
+  seeded with the basic UK ladder), `graph.rs` (`Scheme` = `Vec<Thread>`
+  per D9, `StitchInstance.targets: Vec<StitchRef>` per D4/D5/D10),
+  `geometry.rs` (raw 3D placement — no relaxation, that's M2). 17 unit
+  tests, all passing; `cargo clippy --all-targets` clean; `cargo fmt`
+  applied. Tests explicitly cover a conventional row-into-chain scheme
+  and a fully non-row freeform scheme (both required by the M1
+  acceptance criteria above), plus increase/decrease/spike-stitch/
+  unplaced-target-error cases. Git repo initialized for the project;
+  work committed in two steps (docs scaffold, then M1 core). Next: M2
+  (elasticity/relaxation).
 - 2026-08-24 — Owner approved the 6-milestone plan. Starting M1.
 - 2026-08-24 — Owner corrected a model detail: `ch` has **zero** insertion
   targets (formed purely from the working loop), and a turning chain is

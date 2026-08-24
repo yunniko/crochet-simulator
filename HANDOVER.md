@@ -2,8 +2,34 @@
 
 ## Current state
 
-Project just created (2026-08-24). No code yet. Goal G-001 is planned with
-5 milestones (see `GOALS.md`); none started.
+**M1 done (2026-08-24).** `core/` is a Rust crate implementing:
+- `stitch.rs` — the open `StitchRegistry` (§3a), seeded with the basic UK
+  ladder (`ch`, `ss`, `dc`, `htr`, `tr`, `dtr`, `trtr`, `quad_tr`) as
+  parametrised pre-wrap/draw-through recipes (§3), including the
+  htr-vs-tr height distinction (D10 area) and `ch`'s zero-target,
+  zero-insertion special status.
+- `graph.rs` — the insertion graph (D4): `Scheme` is a `Vec<Thread>` (D9,
+  never a singleton even though only one thread is ever populated so
+  far), `Thread` is a working-order `Vec<StitchInstance>`, each instance
+  carries `targets: Vec<StitchRef>` (0 for `ch`, 1 normal, 2+ decrease,
+  shared across instances for an increase) — `StitchRef` already supports
+  cross-thread indices for the future D9 join case, unused for now.
+- `geometry.rs` — raw (unrelaxed) 3D placement: walks each thread in
+  working order, positions each stitch from its target(s)' already-placed
+  position plus its height, and returns an explicit `Result` (never
+  panics) if a target isn't placed yet. Deliberately naive — no
+  elasticity (M2) or self-intersection checking (M3) yet.
+
+17 unit tests cover: `ch`/`ss` zero-target/zero-height special cases,
+strictly-increasing stitch heights including the htr/tr distinction,
+registry extensibility, a conventional row-into-a-chain scheme, an
+increase spreading its siblings, a decrease averaging its targets, a
+spike stitch (target further back than the immediate predecessor), a
+fully non-row freeform scheme, and a not-yet-placed-target error path.
+`cargo clippy --all-targets` is clean; `cargo fmt --all` applied.
+
+Not started: M2 (elasticity/relaxation) onward. Goal G-001's 6-milestone
+plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 
 ## Decision record
 
@@ -67,12 +93,13 @@ Not yet built. Planned shape (subject to revision as M1 proceeds):
 
 ## Next steps
 
-Present the revised milestone plan (see `GOALS.md`) for Owner sign-off,
-then start M1. The stitch model should be built directly off
-`docs/crochet-context.md` §3/§3a (stitch recipe + extensible registry), §4
-(insertion graph, not rows), §5 (shaping as target-sharing), §6
-(elasticity as topology), and §8 (geometric invariants) rather than
-re-deriving stitch rules ad hoc.
+M2 (elasticity/relaxation): design the topology-driven relaxation solve
+described in `docs/crochet-context.md` §6 — each insertion-target edge as
+a constraint with some give rather than a rigid offset, settling M1's raw
+placement into a physically plausible shape and re-solving under an
+applied stretch. Keep §6a's forward-compat note in mind (don't hard-code
+unconstrained-3D-only). No relaxation code exists yet; M1's `geometry.rs`
+is intentionally naive placement only.
 
 ## Domain reference
 

@@ -14,9 +14,17 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-Just started — no code yet. See `GOALS.md` → G-001 for the milestone plan.
+M1 (core data model) done: a Rust crate (`core/`) implementing the
+insertion-graph engine — stitch registry, working-order thread(s), raw 3D
+placement geometry. No relaxation/elasticity, validation, WASM bridge, or
+UI yet — see `GOALS.md` → G-001 for the milestone plan and progress log.
 
 ## Run locally
 
-Not yet buildable. Setup instructions will be added here once M1 (core
-engine scaffold) lands.
+```bash
+cargo test          # from the repo root — runs core/'s unit tests
+cargo clippy --all-targets
+cargo fmt --all
+```
+
+No web app yet — that lands in M4 (WASM bridge + minimal viewer).
