@@ -1,0 +1,186 @@
+# Crochet Sim — Handover
+
+## Current state
+
+Project just created (2026-08-24). No code yet. Goal G-001 is planned with
+5 milestones (see `GOALS.md`); none started.
+
+## Decision record
+
+**D1 — Standalone web app, not a Blender plugin (2026-08-24).**
+Owner chose "standalone app" over a Blender plugin when asked, because it
+gives full control over a UI purpose-built for scheme design rather than
+being constrained by Blender's panel system and Python API/versioning, and
+doesn't require Blender to be installed to use the tool. A Blender plugin
+remains a plausible later add-on (same core, thin wrapper) if the Owner
+wants to reuse Blender's viewport/renderer down the line — not ruled out,
+just not the initial target.
+
+**D2 — Rust core, compiled to WASM, behind a Next.js/TypeScript UI
+(2026-08-24).** The task requires a compiled language for the performance-
+critical part (yarn-path geometry and self-intersection checks over
+potentially thousands of stitches). Options considered:
+- *Rust → WASM + Next.js/TS frontend* (chosen): matches the portfolio's
+  existing stack for everything except the core (`listing-studio` and
+  `when-we-meet` are both Next.js/TypeScript/Prisma/Postgres web apps —
+  see `E:\CLAUDE\COMPANY\STANDARDS.md` "minimize spread"), reuses the same
+  Vitest+Playwright test setup and the same Docker/nginx deploy pattern
+  documented in `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`, and Rust-to-WASM is
+  a well-trodden path for browser-side geometry/physics work. Rust's
+  ownership model also suits a geometry kernel with lots of shared curve
+  data and no GC pauses during simulation.
+  - No pure-persistence "database" is needed for the simulation itself —
+    schemes are documents, not relational data — but the app will still
+    likely want Postgres for saved-scheme storage/accounts later, which
+    also matches the portfolio.
+- *C++ core, native desktop app*: stronger geometry/physics library
+  ecosystem and is Blender's own implementation language (would help *if*
+  a Blender plugin is built later), but a from-scratch native desktop app
+  breaks from the portfolio's web-app pattern for no strong reason given
+  the Owner picked "standalone" over "Blender plugin" — rejected for now.
+  Revisit if profiling ever shows WASM is a real bottleneck, or if the
+  Blender-plugin option is picked back up later.
+- *C# / Unity*: good 3D tooling out of the box, but introduces a whole new
+  ecosystem to the portfolio with no existing project to share it with —
+  rejected per "minimize spread."
+
+**D3 — MVP targets full 3D yarn simulation, not a 2D chart-only first cut
+(2026-08-24).** Owner's explicit choice when asked. This makes M1/M2 (see
+GOALS.md) bigger than a 2D-first plan would have been, but matches the
+goal's own framing ("simulating a yarn thread, which will be folded and
+intersected multiple times") more directly than a flat-chart intermediate
+step would.
+
+## How things fit together
+
+Not yet built. Planned shape (subject to revision as M1 proceeds):
+- `core/` — Rust crate: an **insertion graph** of stitch instances (working
+  order + insertion-target edges — see `docs/crochet-context.md` §4), an
+  extensible stitch registry (§3a), a relaxation/elasticity solve (§6), and
+  self-intersection/geometry validation on the relaxed shape (§8). Pure
+  Rust, unit-testable without any UI, compiled to WASM (`wasm-bindgen`) for
+  the browser.
+- `web/` — Next.js/TypeScript app: scheme editor UI + a 3D viewport
+  (likely three.js / react-three-fiber) that calls into the WASM core and
+  renders its output, highlighting any flagged geometry problems. The
+  editor must not assume row/round structure — see D4 below.
+
+## Next steps
+
+Present the revised milestone plan (see `GOALS.md`) for Owner sign-off,
+then start M1. The stitch model should be built directly off
+`docs/crochet-context.md` §3/§3a (stitch recipe + extensible registry), §4
+(insertion graph, not rows), §5 (shaping as target-sharing), §6
+(elasticity as topology), and §8 (geometric invariants) rather than
+re-deriving stitch rules ad hoc.
+
+## Domain reference
+
+`docs/crochet-context.md` — UK/GB crochet terminology and construction
+rules, written specifically to inform the engine's data model. Marked with
+⚠ wherever a detail needs real crochet-literate review before being encoded
+as a hard rule — check those before M1 locks in the stitch primitives.
+
+## Decision record (continued)
+
+**D4 — Core model is an insertion graph, not row/round objects
+(2026-08-24, Owner correction).** The first draft of `docs/crochet-
+context.md` modelled rows/rounds as structural units the engine reasons
+about (turning chains between rows, "insert into the previous row," etc.).
+Owner corrected this: freehand/freeform crochet, hyperbolic crochet, and
+other exotic styles don't work in rows at all, so a row-based core model
+would need special-casing or a rewrite to support them. The actual model:
+a single continuous thread as an ordered sequence of stitch instances in
+working order, each with one or more insertion-target references to
+earlier stitch instance(s) (see `docs/crochet-context.md` §4). Rows/rounds
+become a derived, optional grouping — useful for pattern-text generation
+and UI, never load-bearing in the simulation core. Increases/decreases,
+spike stitches, post stitches, and freeform placement all fall out of the
+same "how many insertion targets, how many stitches share a target"
+property, with no separate exception-handling per technique.
+
+**D5 — Elasticity is simulated as a topology property, not a yarn
+property (2026-08-24, Owner).** The fabric must visibly stretch/deform
+realistically, but that behaviour should emerge from how much relative
+motion the insertion-graph's connections allow (dense stitches = less
+give, open/tall stitches = more give), not from giving the yarn itself a
+spring constant. This means a **relaxation/solve step** is a real part of
+the simulation pipeline — settling the graph to equilibrium and re-solving
+it under stretch — sitting between raw stitch placement and the
+self-intersection check (validate the *relaxed* shape). See
+`docs/crochet-context.md` §6 for detail; the milestone plan below folds
+this in as its own milestone rather than bolting it onto geometry
+validation.
+
+**D6 — Multi-language stitch-name recognition is a future capability, UK
+stays canonical now (2026-08-24, Owner).** Beyond the US↔UK distinction
+already logged, stitch-name recognition should eventually cover other
+languages/naming systems too. No timeline yet, but it means the stitch
+registry (D4, `docs/crochet-context.md` §3a) must key stitches by a stable
+internal ID with localized-name mapping layers on top, from the start —
+not a UK-abbreviation-as-key data model that a later multi-language effort
+would have to unwind.
+
+**D7 — Textured/compound stitches and other stitch traditions are
+deferred but must not require a redesign to add (2026-08-24, Owner).**
+Clusters/shells/bobbles/popcorns/etc. stay out of scope through the early
+milestones, confirmed by Owner, on the condition that the stitch registry
+(D4, §3a) is built open/extensible (composition of simpler
+stitches/insertions) rather than a closed enum, so adding them later is a
+registration, not a rewrite.
+
+**D8 — 2D vs 3D construction-space modes are deferred but must stay
+addable (2026-08-24, Owner).** Flat pieces (doilies, granny squares, lace)
+and volumetric pieces (amigurumi, bowls, bags) will eventually need
+distinct modes, but this is explicitly out of scope for now. Working
+assumption (not final, see `docs/crochet-context.md` §6a): the D5
+relaxation solver is already general enough that flat vs. curved shape
+emerges from topology alone, so "2D mode" is likely a flat-pattern
+viewport/editing convenience plus an optional planar constraint on the
+solver, not a second physics engine — revisit for real when M2 (relaxation)
+or M4/M5 (viewer/editor) is actually being built. Noted here so those
+milestones aren't implemented in a way that assumes unconstrained 3D only.
+
+**D9 — Schemes must support multiple threads/joins later; the scheme
+object is a list of threads from the start (2026-08-24, Owner).** Real
+crochet often builds a piece from more than one separately-started thread:
+Irish crochet motifs worked independently and then joined (either live,
+by crocheting through an already-finished edge, or afterward via a
+chain/slip-stitch net), and amigurumi parts (limbs, ears) worked
+separately and then sewn onto the body with their own tail. Confirmed out
+of scope for now, but the top-level scheme object must be a **list of
+one-or-more threads** from M1 onward (each thread internally the D4
+insertion graph), even while only ever containing one thread in the
+earliest milestones — treating it as an implicit singleton now would make
+multi-thread support later a restructuring rather than additive. The two
+join mechanisms (a same-thread-model "crochet join" edge vs. a
+structurally different "sewn seam" constraint) don't need designing yet —
+see `docs/crochet-context.md` §4a.
+
+**D10 — Chains have zero insertion targets; turning chains are not a
+special case (2026-08-24, Owner correction).** `ch` never has an insertion
+target at all — it's formed purely from the working loop, unlike every
+other stitch (which has exactly one, or several for increases/decreases).
+This was already implicit in the terminology (§1: "pull a new loop through
+the loop on the hook") but D4's write-up hadn't stated it as a formal
+model fact, and had wrongly implied turning chains carry some special
+per-convention ambiguity (⚠ flag, now removed). Corrected: a turning chain
+is structurally identical to any other chain (zero targets); the only
+thing that varies by convention is an ordinary property of the *next*
+stitch after the turn (which earlier point it targets), already covered by
+the general insertion-target mechanism — no chain-specific rule needed
+anywhere in the engine. See `docs/crochet-context.md` §3/§4/§8 invariant 2.
+
+## Milestone re-plan pending (2026-08-24)
+
+D4/D5/D6/D7 above change the shape of the milestone plan from what was
+originally proposed (5 milestones, row-based M1, self-intersection-only
+M2). See `GOALS.md` for the proposed 6-milestone replacement — needs
+Owner sign-off before M1 starts.
+
+## Open questions for the Owner
+
+None blocking right now. Worth revisiting later: whether saved schemes
+need user accounts (portfolio pattern has one project with auth —
+`listing-studio` — and one deliberately without — `when-we-meet`); punt
+until persistence (M5) is actually being designed.

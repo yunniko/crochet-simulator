@@ -1,0 +1,16 @@
+# Rust
+/target/
+**/target/
+
+# Node / web (added in a later milestone)
+node_modules/
+.next/
+out/
+
+# Env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
