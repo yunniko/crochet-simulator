@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// A saved scheme. Per D2's original note ("schemes are documents, not
+// relational data") and D11 (see HANDOVER.md): stored as a JSON document
+// (`stitches`, the same WireStitch[] shape the wasm bridge already
+// consumes/produces) rather than normalized into per-stitch rows — nothing
+// ever queries into individual stitches server-side, only loads/stores the
+// whole graph, so a relational schema would add joins with no benefit.
+//
+// No accounts (M6 access-model decision, 2026-08-25): `slug` is an
+// unguessable URL token, not tied to any user — whoever has the link can
+// view and re-save over it. `id` stays a separate short internal key so
+// `slug` can be regenerated/rotated later without touching relations, even
+// though nothing references a Scheme by relation yet.
+model Scheme {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String?
+  stitches  Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}

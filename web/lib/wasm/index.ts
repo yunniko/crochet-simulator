@@ -1,5 +1,17 @@
 import init, { compute_scheme } from "./crochet_wasm";
 
+export {
+  STITCH_KINDS,
+  LOOP_TARGETS,
+  CAPACITY_STYLES,
+  type StitchKind,
+  type LoopTarget,
+  type CapacityStyle,
+  type WireStitch,
+  type WireScheme,
+} from "@/lib/stitch-kinds";
+import type { WireScheme } from "@/lib/stitch-kinds";
+
 export interface WasmVec3 {
   x: number;
   y: number;
@@ -42,30 +54,4 @@ function ensureInit(): Promise<unknown> {
 export async function computeScheme(scheme: WireScheme): Promise<ComputeResult> {
   await ensureInit();
   return compute_scheme(scheme) as ComputeResult;
-}
-
-// --- Wire format (mirrors wasm/src/lib.rs's WireStitch/WireScheme by
-// hand — no shared codegen for these yet, see web/AGENTS.md) ---
-
-export type StitchKind = "ch" | "ss" | "dc" | "htr" | "tr" | "dtr" | "trtr" | "quad_tr" | "mr";
-
-export const STITCH_KINDS: StitchKind[] = ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr", "mr"];
-
-export type LoopTarget = "Both" | "FrontOnly" | "BackOnly" | "FrontPost" | "BackPost";
-
-export const LOOP_TARGETS: LoopTarget[] = ["Both", "FrontOnly", "BackOnly", "FrontPost", "BackPost"];
-
-export type CapacityStyle = "Fixed" | "Elastic" | "TightenedRing";
-
-export const CAPACITY_STYLES: CapacityStyle[] = ["Fixed", "Elastic", "TightenedRing"];
-
-export interface WireStitch {
-  kind: StitchKind;
-  targets: number[];
-  loop_target?: LoopTarget;
-  capacity_override?: CapacityStyle;
-}
-
-export interface WireScheme {
-  stitches: WireStitch[];
 }

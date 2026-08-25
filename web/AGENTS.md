@@ -16,15 +16,34 @@ actual simulation engine — this is only the viewer). Goal/milestone plan:
 `../GOALS.md`. Company-wide standards: `E:\CLAUDE\COMPANY\`.
 
 - Stack: TypeScript, Next.js App Router, Tailwind v4, react-three-fiber +
-  drei for the 3D viewport. No database/Prisma yet — nothing here persists
-  anything (that's M6).
+  drei for the 3D viewport, Prisma 7 (`@prisma/adapter-pg`, client
+  generated into `generated/prisma` — regenerate with `npx prisma
+  generate`) + PostgreSQL via `docker compose up -d db` (root
+  `docker-compose.yml`) for saved-scheme persistence (M6). No accounts —
+  a saved scheme is reached by an unguessable slug, not a login; see
+  `../HANDOVER.md`'s M6 access-model decision before adding anything that
+  assumes an "owner."
 - `lib/wasm/` — the compiled engine. `crochet_wasm.js`/`.d.ts`/
   `crochet_wasm_bg.wasm` are **generated** by `wasm-bindgen`, not hand-
   written (see `../HANDOVER.md` M4 for the exact rebuild command) —
   excluded from ESLint in `eslint.config.mjs` for that reason. `index.ts`
-  is the one hand-written file in that folder: a thin loader wrapper, plus
-  the `DemoResult`/`WasmSegment`/`WasmVec3` types mirroring `wasm/src/
-  lib.rs`'s Rust DTOs by hand (no shared codegen for these yet).
+  is the one hand-written file in that folder: a thin loader wrapper.
+  The wire-format types/constants it re-exports (`WireStitch`,
+  `STITCH_KINDS`, etc., mirroring `wasm/src/lib.rs`'s Rust DTOs by hand —
+  no shared codegen for these yet) actually live in `lib/stitch-kinds.ts`,
+  split out specifically so server-only code (`lib/validation.ts`,
+  `app/actions.ts`) can use them without pulling the browser-only wasm
+  loader into a server action's module graph.
+- `dynamic(..., { ssr: false })` **cannot be called directly inside a
+  Server Component** in this Next version — only from within a Client
+  Component. `EditorApp` (the real app shell) needs `ssr: false` itself
+  (it reads `window.location.origin` during render for the share-link
+  display), so `app/EditorAppLoader.tsx` is a one-line Client Component
+  wrapper that does the `dynamic()` call; `page.tsx` and `s/[slug]/
+  page.tsx` (Server Components) import that wrapper, never `dynamic`
+  directly. `YarnViewer`'s own `dynamic(..., {ssr:false})` inside
+  `EditorApp` is fine as-is, since `EditorApp` is already a Client
+  Component by the time it's called.
 - `allowedDevOrigins: ["127.0.0.1"]` in `next.config.ts` is required for
   Playwright (which drives the dev server via `127.0.0.1`) — without it,
   Next's dev-origin check silently 403s every JS chunk and the app just
@@ -36,19 +55,16 @@ actual simulation engine — this is only the viewer). Goal/milestone plan:
 - react-three-fiber touches `window` on import — any component using it
   must be loaded via `next/dynamic(..., { ssr: false })`, never imported
   directly into a server component or a client component that might SSR.
-- Two test layers, per Company standard — but currently only one is set
-  up: Playwright e2e (`tests/e2e/`, `npm run test:e2e`), asserting via
-  `data-testid` hooks on the stats readout / stitch list, not on canvas
-  pixels (visual correctness of the 3D render itself needs real human/
-  visual review). No Vitest unit-test setup yet — `SchemeEditor.tsx` (M5)
-  is real TS logic (form state, target-checkbox bookkeeping) but still
-  thin enough (no non-trivial pure functions of its own) that it hasn't
-  crossed the bar for a dedicated unit-test layer; the actual business
-  logic still lives almost entirely in `../core/`'s 44+ Rust unit tests,
-  reached through the single `compute_scheme` wasm call. Add Vitest once
-  `web/` grows real pure-TS logic worth isolating (e.g. client-side
-  scheme validation before it hits wasm), matching `listing-studio`/
-  `when-we-meet`'s setup rather than inventing a new one.
+- Two test layers, per Company standard: Playwright e2e (`tests/e2e/`,
+  `npm run test:e2e`), asserting via `data-testid` hooks on the stats
+  readout / stitch list, not on canvas pixels (visual correctness of the
+  3D render itself needs real human/visual review) — `persistence.spec.ts`
+  (M6) hits the real dev Postgres through actual server actions, not
+  mocked. Vitest unit tests (`tests/unit/`, `npm run test:unit`) added in
+  M6 once there was real pure-TS logic worth isolating (`lib/validation.ts`'s
+  zod schema, `lib/slug.ts`'s generator) — the bulk of business logic
+  still lives in `../core/`'s Rust unit tests, reached through the single
+  `compute_scheme` wasm call.
 - **Test coverage gap, found and fixed in M5 — worth repeating so it isn't
   reintroduced:** a preset/test can build a scheme and assert its stitch
   count without ever asserting it *validates* (`ok`/`violation_count`).

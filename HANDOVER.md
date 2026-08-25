@@ -426,8 +426,153 @@ run test:e2e` (5/5) all clean. Also manually exercised in a real browser:
 all four presets (including the swapped-in freeform spike, confirmed
 clean/white segments not red), plus clearing and hand-adding a stitch.
 
-Not started: M6 (persistence + deploy) onward. Goal G-001's 6-milestone
-plan is in `GOALS.md`, approved by the Owner 2026-08-24.
+**M6 in progress (2026-08-25): persistence.** The deploy half of M6 is not
+started yet — see "Open questions for the Owner" below.
+
+**Access model: no accounts, unguessable private links (Owner decision,
+2026-08-25).** The open question logged back at M1 ("do saved schemes
+need user accounts?") came due once persistence was actually being
+designed. Owner chose the simplest of three options offered (no accounts
++ unguessable links, vs. a single shared public list, vs. full accounts
+matching `listing-studio`'s auth stack): each saved scheme gets a 12-char
+unguessable slug; whoever has the link can view and re-save over it; no
+login, no session, nothing listed publicly. This is architecturally
+identical to `when-we-meet`'s room-link model (same `nanoid`
+`customAlphabet`, same unambiguous 32-symbol alphabet, same collision-
+retry pattern) minus that project's participant/cookie-identity layer
+entirely — a saved scheme has no "owner" to distinguish from any other
+visitor, so there's nothing for a cookie to identify.
+
+**Persistence: Postgres + Prisma, JSON-document storage, matching D2's
+original note.** `web/prisma/schema.prisma`'s one model, `Scheme`
+(`id`, `slug` unique, `name` optional, `stitches: Json`, timestamps),
+stores the exact `WireStitch[]` shape the wasm bridge already consumes —
+never normalized into per-stitch rows, since nothing ever queries into
+individual stitches server-side, only loads/stores the whole graph (D2
+flagged this back at project kickoff: "schemes are documents, not
+relational data"). Stack matches `when-we-meet` exactly (Prisma 7 with the
+`@prisma/adapter-pg` driver adapter, client generated to
+`generated/prisma`, `prisma.config.ts`, `lib/prisma.ts`'s singleton-across-
+hot-reload pattern) — the only Company project so far using Postgres
+without accounts, so the closer analog to copy was `when-we-meet`, not
+`listing-studio`.
+
+**Server actions, not a REST-style route handler.** `app/actions.ts`'s
+`saveScheme` is called directly from the client component with a plain
+JS object argument (Next.js server actions accept arbitrary serializable
+args from a client-component call site, not only `<form action>`), so no
+hand-rolled API route/fetch/JSON-body plumbing was needed. Validates via
+a hand-written `zod` schema (`lib/validation.ts`) mirroring the wire
+format — deliberately a *shape* check only (stitch kind is one of the 9
+known enum values, targets are non-negative integers, etc.), not the
+forward-reference semantic check `wasm/src/lib.rs`'s
+`build_scheme_from_wire` already does: that check only matters when
+actually *computing* a scheme, and the editor already runs every stitch
+through `compute_scheme` before a save is ever offered, so re-deriving it
+server-side would just duplicate logic that already lives correctly in
+Rust. The zod layer exists purely as defence-in-depth against a request
+that bypasses the editor UI entirely (a raw POST), not as the scheme's
+real correctness check.
+
+**No accounts means no ownership check on save** — `saveScheme` will
+overwrite any `slug` it's given, and a `slug` that doesn't exist falls
+back to creating a new scheme rather than erroring, since a stale or
+copied link has no owner identity to mismatch against anyway. This is a
+direct, deliberate consequence of the access-model decision above, not an
+oversight — flagged here so it isn't "fixed" into an ownership check later
+without revisiting that decision first.
+
+**Routing:** `/` is the empty/preset-starting editor; `/s/[slug]` is a
+server component that loads a saved scheme via Prisma and hands it to the
+same client component (`EditorApp`) as initial props, `notFound()`-ing on
+a miss (Next's default 404 page — no custom one, matching `when-we-meet`,
+which doesn't have one either). Saving updates the slug in place via
+`history.replaceState`, not a full navigation/redirect — the WASM module
+stays loaded, the editor state doesn't reset.
+
+**A real Next-16 breaking change hit while wiring this up, not a
+persistence bug per se:** `dynamic(..., { ssr: false })` is no longer
+allowed directly inside a Server Component in this Next version (it was
+fine in `page.tsx` for M4/M5's `YarnViewer`, called from *within* the
+already-client `EditorApp`/`ComputePane` — the failure is specifically
+about calling it from a Server Component). `EditorApp` needs `ssr:false`
+too now (it reads `window.location.origin` directly during render for the
+share-link display, which would otherwise create a genuine server/client
+hydration mismatch on `/s/[slug]` — a saved scheme already has a slug on
+its very first render). Fixed with a one-line Client Component wrapper
+(`app/EditorAppLoader.tsx`) that does the `dynamic(...)` call itself, so
+the Server Component pages (`page.tsx`, `s/[slug]/page.tsx`) only ever
+import that wrapper, never call `dynamic` themselves.
+
+**Docker image.** `web/Dockerfile` + root `docker-compose.yml` follow
+`when-we-meet`'s exact shape (`deps`/`build`/`runtime` stages, one-shot
+`migrate` service via `prisma migrate deploy`, `--profile app` opt-in) —
+picked app port 30020 and Postgres port 54322 (next free in each range
+per `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s registry; **not yet verified
+free on the live host**, that's a live-deploy-time check, not a docs-time
+one). Deliberately does **not** touch the Rust/WASM toolchain — the image
+build assumes `web/lib/wasm/*` (wasm-bindgen's generated output) is
+already committed and current, same assumption the project has run on
+since M4. `next.config.ts` gained `output: "standalone"` (required for
+the Dockerfile's `.next/standalone` copy) and the same clickjacking-
+prevention security headers `when-we-meet` sets, since this project is
+about to be deployed too.
+
+**Verified for real, not just built:** ran the actual production
+(`next build` + `next start`, i.e. no `next dev`) server locally outside
+Docker first — specifically to isolate "does the WASM asset resolve
+outside dev mode" from "does Docker also work," given this project's
+history of environment-specific bugs (M4's three). Confirmed the wasm
+binary is correctly traced into `.next/standalone/.next/static/media/`
+and the app computes/renders correctly. Then built and ran the actual
+`docker compose --profile app up -d --build` stack end-to-end and,
+in a real browser: loaded the containerized app, saved a scheme (name +
+Save button + share-link display all worked), and reloaded that exact
+`/s/<slug>` URL fresh to confirm the round trip through the containerized
+app and its migrated Postgres, not just the dev server. Also verified the
+404 path for an unknown slug. Playwright e2e grew a third spec file
+(`tests/e2e/persistence.spec.ts`, 3 specs: save round-trip, overwrite-in-
+place on repeat save, 404 on an unknown slug) against the real local dev
+Postgres — not mocked, since the point is proving the browser -> server
+action -> Prisma -> Postgres path actually works. Also added a Vitest
+unit-test layer (`tests/unit/`, 10 tests: `saveSchemeSchema`'s
+accept/reject cases, `generateSchemeSlug`'s alphabet/length/uniqueness) —
+crosses the bar `web/AGENTS.md` set for "real TS business logic worth
+isolating" that M4/M5 hadn't reached yet.
+
+**A real test-timing bug, found by running the suite repeatedly, not by
+reading it.** The "saving twice overwrites in place" e2e spec failed
+deterministically (3/3 repeats) with the reload showing 1 stitch instead
+of 2, which looked at first like a real persistence bug (an update
+silently not applying). Checked the actual Postgres row directly
+(`docker exec ... psql`) to settle it: every affected test run's row *did*
+have the correct 2 stitches — the DB and `saveScheme` were correct.  The
+bug was in the test: unlike the *first* save (where the URL genuinely
+changes from `/` to `/s/<slug>`, giving Playwright's auto-retrying
+assertion something real to wait on), a *second* save to an
+already-saved scheme doesn't change the URL or the client-side stitch
+count as a visible side effect of that specific save completing — both
+already show the post-save values before the second save's network round
+trip even starts. So `expect(page).toHaveURL(...)` and
+`expect(stat-stitches)` passed immediately without actually waiting for
+the second save, and the following `page.goto(firstUrl)` sometimes raced
+ahead of the write committing. Fixed by waiting on the actual save
+request/response (`page.waitForResponse` matching the POST) before
+asserting anything post-save — confirmed stable across 5 repeats after
+the fix. Worth remembering for any future "does a repeat action's
+completion" test: if the assertion's target value doesn't actually change
+as a result of the specific action being tested, the assertion isn't
+proof that action finished.
+
+`cargo test` (44 core + 6 wasm, unaffected by this milestone), `npm run
+lint`, `npm run test:unit` (10/10), `npm run build`, `npm run test:e2e`
+(8/8, 5 existing + 3 new, each re-run and stable) all clean, plus the
+from-scratch Docker build and manual browser verification above.
+
+Not started: the deploy half of M6, and M7 (realistic yarn rendering,
+added 2026-08-25 — see GOALS.md). Goal G-001's milestone plan is in
+`GOALS.md`, approved by the Owner 2026-08-24 (M1-M6) and 2026-08-25 (M7
+added).
 
 ## Decision record
 
@@ -613,7 +758,20 @@ Owner sign-off before M1 starts.
 
 ## Open questions for the Owner
 
-None blocking right now. Worth revisiting later: whether saved schemes
-need user accounts (portfolio pattern has one project with auth —
-`listing-studio` — and one deliberately without — `when-we-meet`); punt
-until persistence (M5) is actually being designed.
+**Blocking the deploy half of M6.** `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s
+standard deploy pattern clones the project from a public HTTPS GitHub URL
+on the server (`claude_remote`'s SSH agent isn't set up for GitHub SSH,
+and both existing portfolio projects are public repos for exactly this
+reason). This project has never been pushed anywhere — `git remote -v` is
+empty, no GitHub repo exists for it yet. Creating one and pushing is
+"leaving the workspace" (`VALUES.md` — publishing) and the live-server
+deploy steps themselves are also always-escalate per `OPERATIONS.md` — so
+both need explicit Owner go-ahead before proceeding: specifically, (1)
+should a new GitHub repo be created for this project (public, matching
+`when-we-meet`/`listing-studio`'s reason for being public), under what
+name/account, and (2) confirm the actual live-server deploy steps
+(subdomain choice — `crochet.app.julienika.cz` fits the existing wildcard
+DNS pattern — and the port picks above) before they're run for real.
+
+Resolved: whether saved schemes need user accounts — see the access-model
+decision above (no accounts, unguessable links), 2026-08-25.

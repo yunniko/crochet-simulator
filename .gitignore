@@ -9,6 +9,9 @@ out/
 /web/test-results/
 /web/playwright-report/
 
+# Prisma generated client (web/, added M6)
+/web/generated/prisma
+
 # Env
 .env
 .env.local

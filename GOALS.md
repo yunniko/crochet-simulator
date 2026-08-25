@@ -79,8 +79,55 @@ sign-off before M1 starts):
       portfolio pattern), then deploy following
       `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern, verified
       end-to-end in a browser against the live URL.
+- [ ] M7 — Realistic yarn rendering: render the yarn with real cylindrical
+      thickness (the yarn-diameter constant the validator already uses,
+      not a flat line) along smooth draping curves, and give each stitch
+      kind its own parametric curve template (the actual loop/wrap shape
+      a real stitch has, not the straight-post abstraction the physics/
+      validation geometry uses) so stitches visually read as themselves.
+      Rendering-layer only — must not require changing core/wasm's
+      relaxation or validation geometry, which stay the physics
+      abstraction they already are underneath the visual overlay.
 
 **Progress log** (newest first):
+- 2026-08-25 — **M6 persistence done; deploy half blocked on Owner input.**
+  Owner resolved the standing "accounts?" open question: no accounts,
+  unguessable private links (each saved scheme gets a 12-char slug;
+  whoever has the link can view/re-save it, nothing listed publicly) —
+  same model `when-we-meet` uses for rooms, minus its participant-
+  identity layer (nothing here needs one). Added Postgres + Prisma
+  (`web/prisma/schema.prisma`: one `Scheme` model storing the wire-format
+  stitch list as JSON, per D2's original "schemes are documents" note),
+  a `saveScheme` server action, and a `/s/[slug]` route that loads a
+  saved scheme into the same editor. Docker image + compose file follow
+  `when-we-meet`'s exact shape (app port 30020, Postgres port 54322 —
+  next free in each range, not yet verified on the live host). Verified
+  for real: production build outside Docker first (isolating "does the
+  wasm asset resolve outside dev mode" from Docker itself, given this
+  project's history of environment bugs), then a from-scratch `docker
+  compose --profile app up -d --build`, with save/reload exercised in a
+  real browser against the containerized app + its migrated database, not
+  just the dev server. `npm run test:unit` (new, 10 tests: slug
+  generation, save-schema validation), `npm run test:e2e` (8, was 5: 3 new
+  persistence specs against the real dev Postgres). Full account in
+  `HANDOVER.md`.
+  **Deploy half not started** — this project has never been pushed to
+  GitHub (`git remote -v` empty), and both creating a repo and the live-
+  server steps are always-escalate actions per `OPERATIONS.md`. Open
+  question logged in `HANDOVER.md` for the Owner: create a repo (where,
+  what visibility) and confirm the subdomain/port picks before deploying
+  for real.
+- 2026-08-25 — Owner asked what realistic yarn rendering (real thickness,
+  stitches that visually read as themselves) would need. Answer: cheap
+  part is rendering-layer only (tube geometry at the existing
+  `DEFAULT_YARN_DIAMETER`, a spline instead of a raw polyline); the real
+  work is that every stitch is currently modelled internally as a
+  straight post (a physics/validation abstraction, `core/src/geometry.rs`)
+  with no actual loop/wrap shape, so looking like a real `dc` etc. needs a
+  per-stitch-kind parametric curve template layered on top as a rendering
+  overlay, not a change to the underlying physics geometry. Owner asked
+  for this as its own milestone after M6 — added as M7 above. Continuing
+  M6 (persistence + deploy), already approved and in progress.
 - 2026-08-25 — **M5 done.** Replaced M4's hardcoded demo toggle with a
   real editor (`web/components/SchemeEditor.tsx`): add a stitch by
   picking kind/loop-target/capacity-override and checking earlier
