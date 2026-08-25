@@ -81,6 +81,29 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-25 — Owner gave a precise description of front/back loop
+  mechanics (front strand faces right relative to crocheting direction,
+  back faces left; using one strand leaves the other genuinely free for a
+  different later stitch) plus a mosaic-crochet worked example (back-loop
+  row, then a later row skipping it to reach into the left-free front
+  loops with a taller stitch). Found `LoopTarget::FrontOnly`/`BackOnly`
+  had zero geometric effect despite existing in the model since M1 —
+  fixed with a real offset on the same axis front/back post already
+  uses, tuned (0.2→0.5) against the mosaic scheme as a real test, not
+  guessed. Long-range targeting itself needed no new work (already
+  supported). 44 unit tests total, clean, fmt applied. Full account in
+  `HANDOVER.md`.
+- 2026-08-25 — Owner asked to fix the wide-shell relaxation-folding
+  limitation, with real calibration from their own crochet experience
+  (an ordinary stitch: ~7 comfortable, 11 won't fit; a tightened magic
+  ring: 3-5 pointy, 6-8 flat, 9+ wavy, far more physically impossible;
+  chain/chain-space: much more elastic). Added `CapacityStyle` (Fixed/
+  Elastic/TightenedRing) to the stitch registry, a new `MR` stitch kind,
+  radial (not linear) placement for siblings sharing a target, and
+  explicit sibling repulsion in the relaxation solver. An end-to-end
+  pipeline test confirms 7 into one stitch validates and 11 is flagged —
+  matching the Owner's own boundary exactly. 42 unit tests total, clean,
+  fmt applied. Full account in `HANDOVER.md`.
 - 2026-08-24 — Owner asked whether lace (many stitches sharing one
   insertion point) validates correctly — it didn't, fully. Found and
   fixed a real bug: M3's adjacency rule excluded *any* two stitches

@@ -3,38 +3,69 @@
 //! placement, with no relaxation/elasticity (that's M2) and no
 //! self-intersection validation (that's M3). It exists to prove the
 //! insertion graph produces sane 3D point/segment coordinates at all.
+//!
+//! §5a (multi-way shares): siblings sharing a single target are arranged
+//! **radially** around it, not linearly — see `radius_and_wave`. How far
+//! out, and whether excess siblings bulge into the third dimension, comes
+//! from the target's `CapacityStyle` (`crate::stitch`), calibrated against
+//! the Owner's own crochet experience (docs §5a).
 
 use std::collections::HashMap;
+use std::f64::consts::PI;
 
 use crate::graph::{LoopTarget, Scheme, StitchRef};
-use crate::stitch::{StitchId, StitchRegistry};
+use crate::stitch::{CapacityStyle, StitchId, StitchRegistry};
 use crate::vec3::Vec3;
 
 /// Horizontal step between successive links of a chain with no target.
 const CHAIN_STEP_X: f64 = 1.0;
-/// Lateral spread applied to each additional stitch sharing a target
-/// (an increase), purely so siblings don't all land on the same point.
-/// 0.5, not something smaller: for any stitch taller than `dc` (more than
-/// one own-path sub-segment — see `StitchDef::path_segments`), a sibling's
-/// *lower* sub-segment passes close to the bridge connecting it to the
-/// *next* sibling, at roughly half this spread — empirically, 0.3 put
-/// that near-miss right under `crate::validate::DEFAULT_YARN_DIAMETER`
-/// (a false positive on an entirely ordinary 2-stitch increase in `tr`
-/// or taller). 0.5 clears it with margin. See `crate::validate` module
-/// docs for the fuller picture, including a *deeper*, not-yet-fixed
-/// limitation this does not solve: wide multi-way shares (roughly 5+
-/// stitches into one point) can still fold onto themselves during
-/// relaxation, independent of this constant.
-const INCREASE_SPREAD_X: f64 = 0.5;
+/// How many siblings comfortably share one target before it's under
+/// strain — the Owner's own calibration (docs §5a): "seven is hard but
+/// possible [into one stitch], eleven won't fit"; a tightened magic ring
+/// reads as a flat circle at 6-8 and ripples in 3D beyond that. One
+/// shared threshold serves both cases reasonably (7 sits inside both
+/// ranges) rather than needing separate tuning per target kind.
+const COMFORTABLE_CAPACITY: usize = 7;
+/// Radius siblings sit at, at or below comfortable capacity, for a
+/// `Fixed` target, and the radius a `TightenedRing` plateaus at once it
+/// reaches comfortable capacity.
+const BASE_RING_RADIUS: f64 = 0.4;
+/// Target arc-length between adjacent siblings used to *grow* a radius
+/// with sibling count (`Elastic`, and `TightenedRing` below its plateau).
+const MIN_STITCH_ARC_WIDTH: f64 = 0.5;
+/// Maximum out-of-plane bulge for siblings past comfortable capacity on a
+/// `Fixed` or `TightenedRing` target — a 3D wave/ripple, not in-plane
+/// crowding. Deliberately bounded (see `radius_and_wave`): capacity
+/// doesn't grow without limit just because more siblings arrive, so a
+/// truly excessive count (the Owner: "much more ... can not be
+/// tightened ... because of yarn thickness") still ends up close enough
+/// to trip `crate::validate`'s self-intersection check, rather than the
+/// engine quietly finding room for it forever.
+const WAVE_AMPLITUDE: f64 = 0.4;
 /// Depth offset applied to a front/back post stitch's base, along the
-/// axis orthogonal to both the lateral (x) and height (z) axes. A post
-/// stitch reaches around an earlier stitch's post instead of inserting
-/// into its top loops (docs §2), so its yarn path genuinely does not
-/// occupy the same space as the stitch(es) it reaches past — this is
-/// what lets M3's self-intersection checker treat it correctly as *not*
-/// a collision without needing to special-case "is this a post stitch."
-/// Larger than `crate::validate::DEFAULT_YARN_DIAMETER` on purpose.
-const POST_DEPTH_OFFSET: f64 = 0.4;
+/// same y axis the sibling ring (`radius_and_wave`) also uses — see that
+/// axis's fuller explanation below. A post stitch reaches around an
+/// earlier stitch's post instead of inserting into its top loops (docs
+/// §2), so its yarn path genuinely does not occupy the same space as the
+/// stitch(es) it reaches past — this is what lets M3's self-intersection
+/// checker treat it correctly as *not* a collision without needing to
+/// special-case "is this a post stitch." Larger than
+/// `crate::validate::DEFAULT_YARN_DIAMETER` on purpose — and larger than
+/// `LOOP_HALF_OFFSET` too: reaching around a whole post is a bigger
+/// displacement than picking one strand of a top loop.
+const POST_DEPTH_OFFSET: f64 = 0.7;
+/// Offset applied for `FrontOnly`/`BackOnly` (docs §2, §5b): working into
+/// only one strand of the target's top "V" instead of both. Docs §5b
+/// (Owner) is explicit that the *other* strand stays free for a later,
+/// different stitch to use, and that has to read as a genuinely different
+/// point, not the same point used twice. Somewhat smaller than
+/// `POST_DEPTH_OFFSET` (picking a strand is a smaller displacement than
+/// reaching around a whole post) but not dramatically so: empirically,
+/// a value much smaller left a "mosaic crochet"-style scheme (a taller
+/// stitch spiking back two rows into a front loop deliberately left free
+/// by a back-loop-only row) with a near-miss against nearby geometry,
+/// the same class of issue `POST_DEPTH_OFFSET` needed fixing for.
+const LOOP_HALF_OFFSET: f64 = 0.5;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlacementError {
@@ -64,6 +95,47 @@ impl PlacedScheme {
     }
 }
 
+/// How far out (radius) and how far out of plane (z) a sibling at
+/// `sibling_index` of `total` sharing one target should sit, given the
+/// target's `CapacityStyle` (docs §5a). `angle` is this sibling's position
+/// around the ring, `2*PI*sibling_index/total`.
+fn radius_and_wave(style: CapacityStyle, total: usize, angle: f64) -> (f64, f64) {
+    let grown_radius = total as f64 * MIN_STITCH_ARC_WIDTH / (2.0 * PI);
+
+    match style {
+        CapacityStyle::Elastic => (grown_radius, 0.0),
+        CapacityStyle::Fixed => {
+            if total <= COMFORTABLE_CAPACITY {
+                (BASE_RING_RADIUS, 0.0)
+            } else {
+                (BASE_RING_RADIUS, overflow_wave(total, angle))
+            }
+        }
+        CapacityStyle::TightenedRing => {
+            if total <= COMFORTABLE_CAPACITY {
+                // Cinched ring: radius grows with sibling count up to the
+                // flat plateau. Few siblings (docs §5a: 3-5) stay narrow —
+                // a taller-than-wide silhouette reads as "pointy" without
+                // needing a separate per-stitch lean model. 6-8 reaches
+                // (or nearly reaches) the plateau: a flat circle.
+                (grown_radius.min(BASE_RING_RADIUS), 0.0)
+            } else {
+                (BASE_RING_RADIUS, overflow_wave(total, angle))
+            }
+        }
+    }
+}
+
+/// Out-of-plane ripple for siblings past `COMFORTABLE_CAPACITY`. The
+/// overflow ratio's effect on amplitude is capped at 1.0x
+/// `WAVE_AMPLITUDE` (not let to grow with `total` indefinitely) so a
+/// genuinely excessive sibling count doesn't just keep finding more room
+/// — see `WAVE_AMPLITUDE`'s docs.
+fn overflow_wave(total: usize, angle: f64) -> f64 {
+    let overflow = total as f64 / COMFORTABLE_CAPACITY as f64; // > 1.0
+    WAVE_AMPLITUDE * (overflow - 1.0).min(1.0) * (angle * overflow).sin()
+}
+
 /// Places every stitch in `scheme` in working order. Threads are placed
 /// in list order; a target must already be placed when referenced —
 /// i.e. it must live earlier in the same thread, or in an
@@ -74,8 +146,20 @@ pub fn place_scheme(
     scheme: &Scheme,
     registry: &StitchRegistry,
 ) -> Result<PlacedScheme, PlacementError> {
+    // Pre-pass: how many stitches (scheme-wide) share each single target —
+    // needed up front so the *first* sibling placed already knows the
+    // eventual ring size (docs §5a), not just a running count.
+    let mut target_total: HashMap<StitchRef, usize> = HashMap::new();
+    for thread in &scheme.threads {
+        for stitch in &thread.stitches {
+            if let [single] = stitch.targets.as_slice() {
+                *target_total.entry(*single).or_insert(0) += 1;
+            }
+        }
+    }
+
     let mut placed: HashMap<StitchRef, PlacedStitch> = HashMap::new();
-    let mut increase_use_count: HashMap<StitchRef, u32> = HashMap::new();
+    let mut sibling_index: HashMap<StitchRef, usize> = HashMap::new();
     let mut out_threads: Vec<Vec<PlacedStitch>> = Vec::with_capacity(scheme.threads.len());
 
     for (thread_idx, thread) in scheme.threads.iter().enumerate() {
@@ -90,34 +174,53 @@ pub fn place_scheme(
 
             let (base, top) = match stitch.targets.as_slice() {
                 [] => {
-                    // `ch`: no target at all (docs §3/§4/§8 invariant 2) —
-                    // laid out as a step from wherever the thread left off.
+                    // No target at all (docs §3/§4/§8 invariant 2). `ch`
+                    // lays out as a step from wherever the thread left off
+                    // (`lays_out_as_line`); `mr` and anything else
+                    // zero-target instead stays a point anchor at that
+                    // same spot — a ring, not a line (docs §5a).
                     let base = prev_top.unwrap_or(Vec3::ZERO);
-                    let top = base + Vec3::new(CHAIN_STEP_X, 0.0, 0.0);
+                    let top = if def.lays_out_as_line {
+                        base + Vec3::new(CHAIN_STEP_X, 0.0, 0.0)
+                    } else {
+                        base
+                    };
                     (base, top)
                 }
                 [single] => {
-                    let target_top = placed
+                    let target_stitch = placed
                         .get(single)
-                        .ok_or(PlacementError::TargetNotYetPlaced(*single))?
-                        .top;
-                    let sibling_index = *increase_use_count.get(single).unwrap_or(&0);
-                    increase_use_count.insert(*single, sibling_index + 1);
+                        .ok_or(PlacementError::TargetNotYetPlaced(*single))?;
+                    let target_top = target_stitch.top;
+
+                    let total = *target_total.get(single).unwrap_or(&1);
+                    let index = *sibling_index.get(single).unwrap_or(&0);
+                    sibling_index.insert(*single, index + 1);
+
+                    let style = target_capacity_style(scheme, registry, *single)?;
+                    let angle = 2.0 * PI * index as f64 / total as f64;
+                    let (radius, z_wave) = radius_and_wave(style, total, angle);
+                    // angle = 0 (the first/sole sibling) always lands at
+                    // zero lateral offset, matching the pre-§5a behaviour
+                    // exactly — see `radius_and_wave`'s callers.
+                    let ring_offset =
+                        Vec3::new(radius * (angle.cos() - 1.0), radius * angle.sin(), z_wave);
+
                     let depth_offset = match stitch.loop_target {
                         LoopTarget::FrontPost => Vec3::new(0.0, POST_DEPTH_OFFSET, 0.0),
                         LoopTarget::BackPost => Vec3::new(0.0, -POST_DEPTH_OFFSET, 0.0),
-                        LoopTarget::Both | LoopTarget::FrontOnly | LoopTarget::BackOnly => {
-                            Vec3::ZERO
-                        }
+                        LoopTarget::FrontOnly => Vec3::new(0.0, LOOP_HALF_OFFSET, 0.0),
+                        LoopTarget::BackOnly => Vec3::new(0.0, -LOOP_HALF_OFFSET, 0.0),
+                        LoopTarget::Both => Vec3::ZERO,
                     };
-                    let base = target_top
-                        + Vec3::new(sibling_index as f64 * INCREASE_SPREAD_X, 0.0, 0.0)
-                        + depth_offset;
+                    let base = target_top + ring_offset + depth_offset;
                     let top = base + Vec3::new(0.0, 0.0, def.height());
                     (base, top)
                 }
                 multiple => {
                     // Decrease: base is the average of every target's top.
+                    // Capacity/ring modelling (§5a) doesn't apply here —
+                    // out of scope for this round, see HANDOVER.
                     let mut sum = Vec3::ZERO;
                     for target in multiple {
                         let target_top = placed
@@ -151,6 +254,26 @@ pub fn place_scheme(
     })
 }
 
+/// The `CapacityStyle` a specific target StitchRef behaves as: its own
+/// instance override (docs §5a — e.g. a magic ring deliberately left
+/// open) if set, else the registry default for its stitch kind.
+fn target_capacity_style(
+    scheme: &Scheme,
+    registry: &StitchRegistry,
+    target: StitchRef,
+) -> Result<CapacityStyle, PlacementError> {
+    let target_instance = scheme
+        .get(target)
+        .expect("target_capacity_style called with a StitchRef not in this scheme");
+    if let Some(style) = target_instance.capacity_override {
+        return Ok(style);
+    }
+    let def = registry
+        .get(target_instance.kind)
+        .ok_or(PlacementError::UnknownStitchKind(target_instance.kind))?;
+    Ok(def.capacity_style)
+}
+
 fn linspace(a: Vec3, b: Vec3, segments: u32) -> Vec<Vec3> {
     let n = segments.max(1);
     (0..=n)
@@ -162,7 +285,7 @@ fn linspace(a: Vec3, b: Vec3, segments: u32) -> Vec<Vec3> {
 mod tests {
     use super::*;
     use crate::graph::{LoopTarget, StitchInstance, Thread};
-    use crate::stitch::{CH, DC, DTR, TR};
+    use crate::stitch::{CH, DC, DTR, MR, TR};
 
     fn ref_at(index: usize) -> StitchRef {
         StitchRef::new(0, index)
@@ -234,10 +357,173 @@ mod tests {
         let placed = place_scheme(&scheme, &registry).unwrap();
         let first = &placed.threads[0][1];
         let second = &placed.threads[0][2];
-        assert_ne!(
-            first.base.x, second.base.x,
+        assert!(
+            first.base.distance(&second.base) > 0.1,
             "increase siblings must not coincide"
         );
+    }
+
+    #[test]
+    fn many_siblings_are_spread_around_a_ring_not_a_line() {
+        // 7 dc sharing one target: comfortably within COMFORTABLE_CAPACITY
+        // (docs §5a: "seven is hard but possible"), so should sit on a
+        // circle, not collapse onto a single axis like a linear offset
+        // would leave them vulnerable to.
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![]));
+        for _ in 0..7 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![ref_at(0)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let placed = place_scheme(&scheme, &registry).unwrap();
+        let ys: Vec<f64> = placed.threads[0][1..].iter().map(|s| s.base.y).collect();
+        assert!(
+            ys.iter().any(|&y| y.abs() > 0.05),
+            "siblings should be spread in y (a ring), not collinear along x: {:?}",
+            ys
+        );
+        for pair_i in 1..8 {
+            for pair_j in (pair_i + 1)..8 {
+                let d = placed.threads[0][pair_i]
+                    .base
+                    .distance(&placed.threads[0][pair_j].base);
+                assert!(d > 0.1, "siblings {pair_i} and {pair_j} too close: {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn tightened_magic_ring_radius_grows_then_plateaus() {
+        // Docs §5a (Owner calibration): 3-5 stitches into a tightened
+        // magic ring stay narrow (small radius, no wave); 6-8 reach the
+        // flat plateau (also no wave — that's the "forms a circle" case).
+        let (r_narrow, z_narrow) = radius_and_wave(CapacityStyle::TightenedRing, 4, 0.3);
+        let (r_flat, z_flat) = radius_and_wave(CapacityStyle::TightenedRing, 7, 0.3);
+        assert_eq!(z_narrow, 0.0, "no waviness below comfortable capacity");
+        assert_eq!(z_flat, 0.0, "no waviness right at comfortable capacity");
+        assert!(
+            r_narrow < r_flat,
+            "narrow (4 siblings) should have a smaller radius than flat (7): {r_narrow} vs {r_flat}"
+        );
+        assert!(
+            (r_flat - BASE_RING_RADIUS).abs() < 1e-9,
+            "7 siblings should sit at (or essentially at) the flat plateau radius"
+        );
+    }
+
+    #[test]
+    fn overloaded_tightened_ring_ripples_past_comfortable_capacity() {
+        // Docs §5a: 9+ into a tightened magic ring can't open further and
+        // ripples into a wavy 3D circle instead.
+        let (radius, z) = radius_and_wave(CapacityStyle::TightenedRing, 9, 0.7);
+        assert_eq!(
+            radius, BASE_RING_RADIUS,
+            "radius plateaus, doesn't keep growing"
+        );
+        assert_ne!(
+            z, 0.0,
+            "expected out-of-plane waviness once past comfortable capacity"
+        );
+    }
+
+    #[test]
+    fn magic_ring_is_a_point_anchor_not_a_line() {
+        // Unlike `ch`, `mr` must not pick up the CHAIN_STEP_X used to lay
+        // a foundation chain out in a line — it's a ring/point anchor
+        // (docs §5a), and other stitches gather *around* it.
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(MR, vec![]));
+        for _ in 0..6 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![ref_at(0)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let placed = place_scheme(&scheme, &registry).unwrap();
+        let ring = &placed.threads[0][0];
+        assert_eq!(
+            ring.base, ring.top,
+            "mr should stay a point, not step forward like ch"
+        );
+        // 6 siblings — right in the Owner's "forms a circle" range —
+        // should all sit apart from each other, not collinear/coincident.
+        for i in 1..=6 {
+            for j in (i + 1)..=6 {
+                let d = placed.threads[0][i]
+                    .base
+                    .distance(&placed.threads[0][j].base);
+                assert!(d > 0.1, "siblings {i} and {j} too close: {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn overloaded_fixed_target_bulges_out_of_plane() {
+        // 9 stitches sharing one *ordinary stitch* target (dc, index 1 —
+        // not the chain anchor at index 0, which is deliberately Elastic
+        // per docs §5a): past COMFORTABLE_CAPACITY (7), should push some
+        // siblings off the z=0 plane rather than crowd the in-plane ring
+        // tighter.
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![])); // 0: anchor
+        thread
+            .stitches
+            .push(StitchInstance::new(DC, vec![ref_at(0)])); // 1: the Fixed-capacity target
+        for _ in 0..9 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![ref_at(1)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let placed = place_scheme(&scheme, &registry).unwrap();
+        let target_z = placed.threads[0][1].top.z;
+        let any_out_of_plane = placed.threads[0][2..]
+            .iter()
+            .any(|s| (s.base.z - target_z).abs() > 1e-6);
+        assert!(
+            any_out_of_plane,
+            "expected at least one sibling to bulge out of the z=0 plane once overloaded"
+        );
+    }
+
+    #[test]
+    fn front_and_back_loop_only_stay_geometrically_distinct() {
+        // Docs §5b (Owner): working into only one strand of a target's
+        // top loop leaves the other strand free for a *different* later
+        // stitch — that has to read as a genuinely different point, not
+        // the same point twice.
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![])); // 0
+        thread
+            .stitches
+            .push(StitchInstance::new(DC, vec![ref_at(0)]).with_loop_target(LoopTarget::FrontOnly)); // 1
+        thread
+            .stitches
+            .push(StitchInstance::new(DC, vec![ref_at(0)]).with_loop_target(LoopTarget::BackOnly)); // 2
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let placed = place_scheme(&scheme, &registry).unwrap();
+        let front = &placed.threads[0][1];
+        let back = &placed.threads[0][2];
+        assert!(
+            front.base.distance(&back.base) > 0.1,
+            "front-loop-only and back-loop-only siblings must not coincide"
+        );
+        assert!(front.base.y > 0.0, "front loop should lean toward +y");
+        assert!(back.base.y < 0.0, "back loop should lean toward -y");
     }
 
     #[test]

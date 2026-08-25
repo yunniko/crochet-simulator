@@ -21,6 +21,43 @@ pub const TR: StitchId = StitchId("tr");
 pub const DTR: StitchId = StitchId("dtr");
 pub const TRTR: StitchId = StitchId("trtr");
 pub const QUAD_TR: StitchId = StitchId("quad_tr");
+/// Magic ring / adjustable loop (docs §2, §5a): a foundation anchor, not
+/// an inserted stitch — structurally like `ch` (no insertion, zero
+/// height), but registered separately so it can carry its own capacity
+/// behaviour as a *target* (see `CapacityStyle`).
+pub const MR: StitchId = StitchId("mr");
+
+/// How a stitch behaves as an insertion **target** when several stitches
+/// share it — see docs/crochet-context.md §5a. This is about the target's
+/// own physical give, not the insertion-stiffness of whatever's worked
+/// into it (`insertion_stiffness`, which is about the *inserting*
+/// stitch's own kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapacityStyle {
+    /// Comfortable capacity is small and roughly fixed — an ordinary
+    /// stitch's own top loop physically only fits so much. Beyond
+    /// capacity, extra siblings bulge out of the flat plane (a 3D wave)
+    /// rather than crowd past each other in-plane.
+    Fixed,
+    /// Comfortable capacity grows without bound to keep spacing
+    /// comfortable — the target opens wider to accommodate more (a chain,
+    /// or a chain-space: "chain geometry is very elastic," per the
+    /// Owner). No plateau, no waving.
+    Elastic,
+    /// A magic ring, pulled tight (the Owner's calibration, docs §5a):
+    /// **3–5 stitches** cinch into a small radius (reads as a narrow,
+    /// pointier 3D shape rather than a flat disc); **6–8** is the flat-
+    /// circle sweet spot; **9+** can't open further and ripples into a
+    /// wavy 3D circle; far beyond that, physically can't be tightened
+    /// into one point at all regardless of geometry (yarn thickness) —
+    /// this engine doesn't hard-block it, but the wave stops growing
+    /// enough to keep avoiding collisions, so `crate::validate` will
+    /// correctly flag it eventually. An MR left deliberately un-tightened
+    /// should use `Elastic` instead (via `StitchInstance::
+    /// capacity_override`) — this variant models the tightened case,
+    /// which is the ordinary/default use of a magic ring.
+    TightenedRing,
+}
 
 /// How the loops on the hook are cleared once the pre-wraps and the
 /// inserted loop are on it. See docs/crochet-context.md §3 step 3.
@@ -46,10 +83,21 @@ pub struct StitchDef {
     /// Yarn-overs before inserting the hook. 0 for `dc`, 1 for `htr`/`tr`,
     /// 2 for `dtr`, etc. Meaningless (left 0) when `has_insertion` is false.
     pub pre_wraps: u32,
-    /// False only for `ch`: a chain has no insertion step at all, it's
-    /// formed purely from the working loop (docs §3, §4, §8 invariant 2).
+    /// False for `ch` and `mr`: neither has an insertion step at all,
+    /// both are formed/started purely from the working loop or a drawn-up
+    /// loop (docs §3, §4, §8 invariant 2).
     pub has_insertion: bool,
     pub draw_through: DrawThrough,
+    /// How this stitch behaves as a *target* for other stitches — see
+    /// `CapacityStyle`.
+    pub capacity_style: CapacityStyle,
+    /// True only for `ch`: a zero-target stitch that lays itself out as
+    /// a step forward from wherever the thread left off, forming a line.
+    /// `mr` is also zero-target but is a *point* anchor (docs §5a — a
+    /// ring, not a line), so it must stay false here even though both
+    /// share `has_insertion: false`. Meaningless when a stitch has
+    /// targets (only ever read for the empty-targets placement case).
+    pub lays_out_as_line: bool,
 }
 
 impl StitchDef {
@@ -132,48 +180,76 @@ impl StitchRegistry {
             pre_wraps: 0,
             has_insertion: false,
             draw_through: DrawThrough::Single,
+            capacity_style: CapacityStyle::Elastic,
+            lays_out_as_line: true,
+        });
+        reg.register(StitchDef {
+            id: MR,
+            pre_wraps: 0,
+            has_insertion: false,
+            draw_through: DrawThrough::Single,
+            // Tightened is the ordinary/default use of a magic ring
+            // (that's the point of it vs. a chain ring) — see
+            // `CapacityStyle::TightenedRing`.
+            capacity_style: CapacityStyle::TightenedRing,
+            // A point anchor, not a line (docs §5a) — unlike `ch`.
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: SS,
             pre_wraps: 0,
             has_insertion: true,
             draw_through: DrawThrough::SlipClear,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: DC,
             pre_wraps: 0,
             has_insertion: true,
             draw_through: DrawThrough::Single,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: HTR,
             pre_wraps: 1,
             has_insertion: true,
             draw_through: DrawThrough::AllAtOnce,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: TR,
             pre_wraps: 1,
             has_insertion: true,
             draw_through: DrawThrough::Repeated2,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: DTR,
             pre_wraps: 2,
             has_insertion: true,
             draw_through: DrawThrough::Repeated2,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: TRTR,
             pre_wraps: 3,
             has_insertion: true,
             draw_through: DrawThrough::Repeated2,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg.register(StitchDef {
             id: QUAD_TR,
             pre_wraps: 4,
             has_insertion: true,
             draw_through: DrawThrough::Repeated2,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         reg
     }
@@ -264,7 +340,32 @@ mod tests {
             pre_wraps: 1,
             has_insertion: true,
             draw_through: DrawThrough::Repeated2,
+            capacity_style: CapacityStyle::Fixed,
+            lays_out_as_line: false,
         });
         assert!(reg.get(custom).is_some());
+    }
+
+    #[test]
+    fn mr_has_no_insertion_and_defaults_to_tightened_ring() {
+        let reg = StitchRegistry::with_uk_basics();
+        let mr = reg.get(MR).unwrap();
+        assert!(!mr.has_insertion);
+        assert_eq!(mr.height(), 0.0);
+        assert_eq!(mr.capacity_style, CapacityStyle::TightenedRing);
+    }
+
+    #[test]
+    fn ordinary_stitches_default_to_fixed_capacity() {
+        let reg = StitchRegistry::with_uk_basics();
+        for id in [SS, DC, HTR, TR, DTR, TRTR, QUAD_TR] {
+            assert_eq!(reg.get(id).unwrap().capacity_style, CapacityStyle::Fixed);
+        }
+    }
+
+    #[test]
+    fn ch_is_elastic() {
+        let reg = StitchRegistry::with_uk_basics();
+        assert_eq!(reg.get(CH).unwrap().capacity_style, CapacityStyle::Elastic);
     }
 }

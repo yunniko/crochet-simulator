@@ -220,6 +220,84 @@ mod tests {
     }
 
     #[test]
+    fn capacity_calibrated_shell_sizes_validate_as_expected() {
+        // Owner calibration (docs §5a): 7 into an ordinary stitch is
+        // "hard but possible," 11 "won't fit physically." Confirms the
+        // whole pipeline (radial placement + capacity styles + relaxation
+        // with sibling repulsion) lands on the same boundary end-to-end,
+        // not just in isolated unit checks of the pieces.
+        let registry = crate::stitch::StitchRegistry::with_uk_basics();
+        let validate_shell = |count: usize| -> bool {
+            let mut thread = Thread::new();
+            thread.stitches.push(StitchInstance::new(CH, vec![]));
+            for _ in 0..count {
+                thread
+                    .stitches
+                    .push(StitchInstance::new(DC, vec![ref_at(0)]));
+            }
+            let mut scheme = Scheme::new();
+            scheme.add_thread(thread);
+            let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+            validate_scheme(&scheme, &registry, &relaxed, DEFAULT_YARN_DIAMETER)
+                .unwrap()
+                .ok
+        };
+
+        assert!(
+            validate_shell(7),
+            "7 into one stitch should validate (hard but possible)"
+        );
+        assert!(
+            !validate_shell(11),
+            "11 into one stitch should be flagged (won't fit physically)"
+        );
+    }
+
+    #[test]
+    fn mosaic_style_back_loop_row_with_front_loop_spike_does_not_false_positive() {
+        // Docs §5b (Owner): mosaic crochet works a row into back-loop-only,
+        // leaving the front loops free, then a later row reaches back
+        // *two* rows (skipping the back-loop row entirely) with a taller
+        // stitch worked into those left-free front loops.
+        let registry = crate::stitch::StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        for _ in 0..3 {
+            thread.stitches.push(StitchInstance::new(CH, vec![])); // row0: 0-2
+        }
+        for i in 0..3 {
+            // row1: back-loop-only, into row0 reversed.
+            let target = ref_at(2 - i);
+            thread.stitches.push(
+                StitchInstance::new(DC, vec![target])
+                    .with_loop_target(crate::graph::LoopTarget::BackOnly),
+            ); // 3,4,5
+        }
+        for i in 0..3 {
+            // row2: ordinary, into row1 reversed.
+            let target = ref_at(5 - i);
+            thread.stitches.push(StitchInstance::new(DC, vec![target])); // 6,7,8
+        }
+        // A taller "mosaic" stitch reaching back two rows into row1's
+        // middle stitch (index 4), specifically its front loop — the one
+        // left free when row1 was worked back-loop-only.
+        thread.stitches.push(
+            StitchInstance::new(TR, vec![ref_at(4)])
+                .with_loop_target(crate::graph::LoopTarget::FrontOnly),
+        ); // 9
+
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+        let report = validate_scheme(&scheme, &registry, &relaxed, DEFAULT_YARN_DIAMETER).unwrap();
+        assert!(
+            report.ok,
+            "mosaic-style front-loop spike should not false-positive as a self-intersection: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
     fn small_shell_of_taller_stitches_does_not_false_positive() {
         // A 3-tr shell all worked into one chain-space stitch — the
         // ordinary/common case in lace and general shaping (docs §5:

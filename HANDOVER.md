@@ -153,6 +153,92 @@ Investigation found two distinct problems, one fixed, one still open:
 32 unit tests total (was 30 immediately after M3). Clean under
 `cargo clippy --all-targets`, `cargo fmt` applied.
 
+**Bending/repulsion + target-capacity fix (2026-08-25, Owner-directed).**
+Owner asked to fix the wide-shell folding limitation flagged above, and
+provided real calibration from their own crochet experience: an ordinary
+stitch fits ~7 siblings ("hard but possible"), 11 doesn't ("won't fit
+physically"); a tightened magic ring cinches into a pointy 3D shape at
+3-5 siblings, a flat circle at 6-8, ripples in 3D at 9+, and can't be
+tightened at all far beyond that (yarn thickness); a chain/chain-space is
+much more elastic (granny squares use 3, lace can call for very
+different counts). Implemented as:
+
+- **`CapacityStyle`** (`stitch.rs`, new): `Fixed` (ordinary stitches —
+  small, roughly constant capacity; overflow bulges out of plane, capped
+  so genuine overcrowding still trips M3), `TightenedRing` (magic ring's
+  default — radius grows with count up to a flat plateau, then behaves
+  like `Fixed`), `Elastic` (`ch`, or a ring explicitly left open via a
+  new per-instance `StitchInstance.capacity_override` — radius keeps
+  growing, no plateau, no ripple). One shared capacity threshold (7)
+  serves both the ordinary-stitch and tightened-ring cases, since the
+  Owner's own numbers for both sit close together.
+- **New `MR` (magic ring) stitch kind.** Structurally like `ch` (no
+  insertion, zero height) but must **not** pick up `ch`'s line-laying-out
+  behaviour — added `StitchDef.lays_out_as_line` (true only for `ch`) so
+  `mr` stays a point anchor. This was a real bug caught by a test
+  assertion mismatch, not something reasoned out in advance.
+- **Radial placement** (`geometry.rs`): siblings sharing a target are now
+  arranged around a circle (`radius_and_wave`, angle = `2*PI*index/
+  total`), not offset linearly along one axis — a straight line has no
+  way to represent "opens into a wide circle" or "ripples in 3D." Needed
+  a pre-pass over the whole scheme to know each target's eventual sibling
+  count before placing the first sibling (`target_total`), not just a
+  running counter.
+- **Sibling repulsion** (`relax.rs`): every pair of stitches sharing a
+  single target now gets a one-sided repulsion force, active only once
+  closer than `SIBLING_REPULSION_MIN_DISTANCE` (0.3, above M3's yarn
+  diameter for real margin). Directly addresses the folding gap: springs
+  only ever related a stitch to its own target and its immediate
+  working-order neighbour, never to siblings further round a wide fan —
+  confirmed empirically that a 7-`dc` shell could relax two non-adjacent
+  siblings to ~1e-16 apart without this.
+- Two tuning fixes surfaced while wiring this together, both by testing
+  actual numbers, not guesswork: `POST_DEPTH_OFFSET` raised 0.4→0.7 (the
+  radial placement changed a post stitch's neighbours enough to reopen a
+  near-miss the earlier `INCREASE_SPREAD_X` fix had closed); confirmed
+  `BASE_RING_RADIUS` (0.4) didn't need to move once that was fixed.
+
+**Verified end-to-end, not just per-piece:** a full pipeline test (raw
+placement → relaxation with repulsion → M3 validation) confirms 7
+siblings into one ordinary stitch validates cleanly and 11 is correctly
+flagged — landing exactly on the Owner's own stated boundary, not just
+passing isolated unit assertions. 42 unit tests total (was 32), clean
+under `cargo clippy --all-targets`, `cargo fmt` applied.
+
+**Known simplification, stated in `docs/crochet-context.md` §5a and
+worth repeating here:** the "pointy" look for a lightly-loaded tightened
+ring is currently just a narrower radius, not an actual per-stitch
+inward/outward lean — a reasonable proxy, not a verified claim about the
+precise silhouette. The decrease branch (multiple targets on one stitch)
+also doesn't get any of this capacity/ring treatment — out of scope for
+this round.
+
+**Front/back loop and post as real geometry (2026-08-25, Owner-directed).**
+Owner gave a precise description of front/back loop mechanics (front
+strand faces right relative to the crocheting direction, back strand
+faces left; using only one strand leaves the other genuinely free for a
+different later stitch — real visual/structural consequences, not a
+bookkeeping nicety) and a worked example (mosaic crochet: a back-loop-only
+row, then a later row skipping it entirely to reach into the left-free
+front loops with a taller stitch). `LoopTarget::FrontOnly`/`BackOnly`
+already existed in the graph model but had **zero geometric effect** —
+fixed by giving them a real offset (`LOOP_HALF_OFFSET` in `geometry.rs`),
+on the same axis `FrontPost`/`BackPost` already used. Needed the same
+"tune against a real test, don't guess" treatment as `POST_DEPTH_OFFSET`
+did: an initial small value (0.2) left a mosaic-crochet-style test scheme
+with a near-miss; raised to 0.5. Added as regression tests: front/back
+loop siblings of one target stay geometrically distinct, and the mosaic
+scheme validates without a false positive. Long-range targeting itself
+(the "skip a whole row back" part of mosaic crochet) needed no new work —
+already fully supported by the insertion-graph model (§4) with no
+special-casing for distance. Flagged, not built: nothing yet stops two
+different stitches from claiming the *same* strand of the *same* target,
+which would be a real pattern error — that's a graph-consistency check,
+not a geometric one, and is a different piece of work from anything here.
+
+44 unit tests total (was 42), clean under `cargo clippy --all-targets`,
+`cargo fmt` applied.
+
 Not started: M4 (WASM bridge + minimal viewer) onward. Goal G-001's
 6-milestone plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 

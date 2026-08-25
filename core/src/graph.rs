@@ -6,7 +6,7 @@
 //! `targets` (§5), not a row/round relationship — rows/rounds are not
 //! modelled here at all, by design (§4, HANDOVER D4).
 
-use crate::stitch::StitchId;
+use crate::stitch::{CapacityStyle, StitchId};
 
 /// Which loop(s) of the target this stitch's hook insertion goes through.
 /// Irrelevant for `ch` (no insertion at all).
@@ -45,6 +45,12 @@ pub struct StitchInstance {
     /// decrease. No special case for spike stitches or freeform work —
     /// a target is just a `StitchRef`, wherever it points (§8 invariant 2).
     pub targets: Vec<StitchRef>,
+    /// Overrides the registry-default `CapacityStyle` for this stitch
+    /// **when it is used as another stitch's target** (§5a) — e.g. mark a
+    /// specific magic-ring instance as deliberately left open
+    /// (`Some(Elastic)`) instead of the tightened default. `None` = use
+    /// the registry default for `kind`.
+    pub capacity_override: Option<CapacityStyle>,
 }
 
 impl StitchInstance {
@@ -53,11 +59,17 @@ impl StitchInstance {
             kind,
             loop_target: LoopTarget::default(),
             targets,
+            capacity_override: None,
         }
     }
 
     pub fn with_loop_target(mut self, loop_target: LoopTarget) -> Self {
         self.loop_target = loop_target;
+        self
+    }
+
+    pub fn with_capacity_override(mut self, style: CapacityStyle) -> Self {
+        self.capacity_override = Some(style);
         self
     }
 }

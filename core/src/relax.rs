@@ -13,6 +13,17 @@
 //! Nothing here assumes unconstrained-3D-only (§6a): positions are plain
 //! `Vec3`s with no z-axis special-casing, so a future planar-constraint
 //! mode can clamp or project them without touching this solver's core.
+//!
+//! **Sibling repulsion (§5a).** Springs alone only constrain a stitch's
+//! distance to its own target and to its immediate working-order
+//! neighbour — nothing stops two *non-adjacent* stitches sharing the same
+//! target (a shell, a magic-ring round) from swinging past each other and
+//! folding together over many relaxation steps, since neither kind of
+//! spring involves them directly. Confirmed this empirically: a 7-stitch
+//! shell could relax two non-adjacent siblings to ~1e-16 apart before
+//! this was added. Every pair of stitches that share a single target now
+//! also gets a one-sided repulsion force, active only once they're closer
+//! than `SIBLING_REPULSION_MIN_DISTANCE`.
 
 use std::collections::HashMap;
 
@@ -26,6 +37,14 @@ use crate::vec3::Vec3;
 /// stitch-kind-dependent (unlike insertion stiffness): it's the same
 /// strand of yarn regardless of what's formed at either end.
 const CONTINUITY_STIFFNESS: f64 = 0.6;
+/// Minimum distance same-target siblings try to keep from each other
+/// during relaxation, independent of whatever the springs alone produce.
+/// Larger than `crate::validate::DEFAULT_YARN_DIAMETER` (0.15) on
+/// purpose — keeping real margin *during* relaxation, not just barely
+/// legal at the end, is what stops a wide fan of siblings from folding
+/// together over many steps (see module docs).
+const SIBLING_REPULSION_MIN_DISTANCE: f64 = 0.3;
+const SIBLING_REPULSION_STRENGTH: f64 = 0.5;
 
 struct SpringConstraint {
     a: StitchRef,
@@ -122,6 +141,28 @@ pub fn relax_scheme(
         }
     }
 
+    // Every pair of stitches sharing a single target (§5a) repels once
+    // too close — see module docs for why springs alone don't cover this.
+    let mut same_target_groups: HashMap<StitchRef, Vec<StitchRef>> = HashMap::new();
+    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
+        for (i, stitch) in thread.stitches.iter().enumerate() {
+            if let [single] = stitch.targets.as_slice() {
+                same_target_groups
+                    .entry(*single)
+                    .or_default()
+                    .push(StitchRef::new(thread_idx, i));
+            }
+        }
+    }
+    let mut repulsion_pairs: Vec<(StitchRef, StitchRef)> = Vec::new();
+    for group in same_target_groups.values() {
+        for i in 0..group.len() {
+            for j in (i + 1)..group.len() {
+                repulsion_pairs.push((group[i], group[j]));
+            }
+        }
+    }
+
     let mut velocities: HashMap<StitchRef, Vec3> = refs.iter().map(|r| (*r, Vec3::ZERO)).collect();
 
     for _ in 0..params.steps {
@@ -142,6 +183,22 @@ pub fn relax_scheme(
             let fb = forces[&c.b];
             forces.insert(c.a, fa + force_on_a);
             forces.insert(c.b, fb - force_on_a);
+        }
+
+        for &(a, b) in &repulsion_pairs {
+            let pa = positions[&a];
+            let pb = positions[&b];
+            let delta = pb - pa;
+            let dist = delta.length();
+            if !(1e-9..SIBLING_REPULSION_MIN_DISTANCE).contains(&dist) {
+                continue;
+            }
+            let dir = delta * (1.0 / dist);
+            let push = dir * (SIBLING_REPULSION_STRENGTH * (SIBLING_REPULSION_MIN_DISTANCE - dist));
+            let fa = forces[&a];
+            let fb = forces[&b];
+            forces.insert(a, fa - push);
+            forces.insert(b, fb + push);
         }
 
         for r in &refs {
@@ -274,6 +331,41 @@ mod tests {
             tr_displacement < dtr_displacement,
             "expected tr to resist more than the even taller/softer dtr: tr={tr_displacement}, dtr={dtr_displacement}"
         );
+    }
+
+    #[test]
+    fn sibling_repulsion_prevents_non_adjacent_shell_members_from_coinciding() {
+        // Regression guard: before sibling repulsion existed, a wide
+        // shell (7+ stitches into one target) could relax two
+        // *non-adjacent* siblings (e.g. index 6 and index 7 of a 7-dc
+        // shell) to ~1e-16 apart — springs only constrain a stitch to its
+        // own target and its immediate working-order neighbour, never to
+        // siblings further round the fan. Confirmed empirically that this
+        // no longer happens.
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(CH, vec![]));
+        for _ in 0..7 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![ref_at(0, 0)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+        for i in 1..=7 {
+            for j in (i + 1)..=7 {
+                let d = relaxed
+                    .position(ref_at(0, i))
+                    .unwrap()
+                    .distance(&relaxed.position(ref_at(0, j)).unwrap());
+                assert!(
+                    d > SIBLING_REPULSION_MIN_DISTANCE * 0.5,
+                    "siblings {i} and {j} folded too close together: {d}"
+                );
+            }
+        }
     }
 
     #[test]

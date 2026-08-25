@@ -20,8 +20,14 @@ geometry, a mass-spring relaxation solve where stitch topology (not a
 separate material property) determines how stretchy the fabric is, and
 self-intersection / stitch-count validation on the relaxed shape (correctly
 distinguishing a legitimate post-stitch crossing from a real collision).
-No WASM bridge or UI yet — see `GOALS.md` → G-001 for the milestone plan
-and progress log.
+Since then, M3's validation and the underlying placement/relaxation have
+been refined against real crochet calibration from the Owner: multi-way
+shares (shells, magic rings, chain-spaces) get capacity-aware radial
+placement and sibling repulsion (an ordinary stitch validates ~7 siblings,
+correctly flags ~11+; a tightened magic ring reads as pointy at 3-5, flat
+at 6-8, wavy at 9+); front/back loop targeting is now geometrically real,
+supporting techniques like mosaic crochet. No WASM bridge or UI yet — see
+`GOALS.md` → G-001 for the milestone plan and progress log.
 
 ## Run locally
 

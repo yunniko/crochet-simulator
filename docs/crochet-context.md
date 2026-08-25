@@ -258,6 +258,125 @@ scheme.
   not new primitives. 1-target/not-shared is the default; increases and
   decreases are simply other values of the same property.
 
+## 5a. Multi-way shares and target capacity
+
+**Decision (2026-08-24/25, Owner, prompted by a question about lace).**
+Real insertion points have a **physical capacity** for how many stitches
+can share them, and that capacity — and what happens once it's exceeded —
+depends on *what kind of point* it is, not just "how many stitches." The
+Owner's own calibration, which the engine's constants are tuned against:
+
+- **An ordinary stitch's top** (the usual increase target): comfortably
+  fits a handful of siblings; **seven is hard but possible**; **eleven
+  won't fit** — real yarn thickness makes it physically impossible, not
+  just visually crowded.
+- **A magic ring, tightened** (the ordinary way one is used): **3-5
+  stitches** cinch into a small radius and read as a **narrower, pointier
+  3D shape** rather than a flat disc; **6-8** is the flat-circle sweet
+  spot (the classic amigurumi round-1 start); **9+** can't open the ring
+  any further and **ripples into a wavy 3D circle** instead; far beyond
+  that, it's not that the shape gets stranger — it's that a ring genuinely
+  **cannot be tightened around that many strands at all**, a hard physical
+  limit, not a gradient.
+- **A magic ring left deliberately open, or a chain/chain-space** (the
+  gap enclosed by a run of chain stitches, e.g. "3dc in the ch-3 space" in
+  a granny square): **very elastic** — comfortably widens to fit more
+  without the same physical ceiling. Granny squares typically use 3;
+  lace and freeform work can call for very different counts, and the
+  engine needs to handle that range, not just the granny-square norm.
+
+**Model implication.** Every stitch, as a *target* for others, has a
+`CapacityStyle` (§3a's registry, so it's per-kind and overridable per
+instance for cases like "this specific ring was left open"):
+- `Fixed` — ordinary stitches (`dc`, `tr`, ... `quad_tr`, `ss`). Small,
+  roughly constant comfortable capacity; past it, extra siblings don't
+  crowd further in-plane, they bulge out of the flat plane (a 3D ripple)
+  — and that bulge is deliberately bounded, so a truly excessive count
+  still ends up geometrically too close for §8 invariant 4's checker to
+  wave through, which is what makes "eleven won't fit" a real, discoverable
+  fact rather than something the placement code has to hard-code as a
+  rule.
+- `TightenedRing` — a magic ring's default. Radius **grows with sibling
+  count up to a flat plateau** (few siblings stay narrow/pointy, more
+  reach the flat-circle plateau), then behaves like `Fixed` beyond it
+  (ripples, same bounded-bulge reasoning).
+- `Elastic` — `ch` (and a magic ring explicitly left open, via the
+  per-instance override). Radius keeps growing with sibling count, no
+  plateau, no rippling — "chain geometry is very elastic," per the Owner.
+
+One shared "comfortable capacity" threshold (currently 7) serves both the
+ordinary-stitch case and the tightened-ring case reasonably, since the
+Owner's own numbers for both (7 hard-but-possible; 6-8 the ring's flat
+range) sit close together — no separate tuning needed per target kind.
+
+**Geometric mechanism.** Siblings sharing a target are placed **radially**
+around it (an angle per sibling, `2*PI*index/total`), not linearly along
+one axis — a linear offset has no way to represent "opens into a wide
+circle" or "ripples in 3D," and (see `HANDOVER.md`) turned out to let
+non-adjacent siblings fold into each other during relaxation, since
+nothing but the linear ordering related them at all. The relaxation
+solver (§6) also gained an explicit **repulsion** between every pair of
+stitches sharing a target, active only once they're closer than a minimum
+distance — springs alone only relate a stitch to its own target and its
+immediate working-order neighbour, never to siblings further round a
+wide fan, so nothing stopped a wide share from folding onto itself before
+this was added.
+
+**Known simplification, stated plainly:** the "pointy" look for a
+lightly-loaded tightened ring is modelled only as a *narrower radius*
+(shorter distance from the ring to where the siblings sit), not as an
+actual per-stitch inward/outward *lean*. That's a reasonable proxy for
+"reads as more vertical/pointed than a flat disc," not a claim about the
+precise silhouette real yarn would form — flagged here rather than
+overclaiming precision the Owner's description didn't fully pin down.
+
+## 5b. Front/back loop and post as genuinely separate points
+
+**Decision (2026-08-25, Owner).** A stitch's top loop (§2's FLO/BLO) has
+two strands — the **front** strand (the Owner's own description: the half
+facing toward the right, relative to the direction of crocheting) and the
+**back** strand (facing left, relative to that same direction). Working
+into only one strand — as most stitches don't, but some deliberately do —
+**leaves the other strand free for a different, later stitch to use.**
+That has real visual and structural consequences: it isn't a preference
+about which half to "count," it produces two genuinely distinct available
+insertion points on the same stitch.
+
+**Model implication.** `LoopTarget::FrontOnly`/`BackOnly` (already in the
+graph model, §4 — `StitchInstance.loop_target`) previously had **no
+geometric effect at all**: a stitch marked `FrontOnly` and one marked
+`BackOnly`, both targeting the same earlier stitch, would place
+identically apart from ordinary sibling-ring spacing (§5a) — nothing
+represented that they'd actually landed on two different strands. Fixed:
+`geometry.rs` now applies a real offset (`LOOP_HALF_OFFSET`) for
+`FrontOnly`/`BackOnly`, on the same axis `FrontPost`/`BackPost` (§2's post
+stitches — attaching to the *leg*/post of an earlier `tr`/`dtr` rather
+than its top loops, for raised/cable texture) already used, just a
+smaller displacement — picking one strand of a loop is a smaller physical
+move than reaching around an entire post, though empirically not
+*dramatically* smaller (see `geometry.rs`'s comment on the exact value
+picked, and why).
+
+**Confirms an existing capability, not a new one:** targeting a stitch
+several rows back (not just "the row below") was already fully supported
+by the insertion-graph model (§4 — there's no special-casing for how far
+back a target is). **Mosaic crochet** is the concrete case that ties
+FLO/BLO and long-range targeting together: a row worked entirely into
+back loops only, leaving every front loop in that row free, then a later
+row (skipping the back-loop row entirely) reaches back with a taller
+stitch into those left-free front loops. Added as an explicit test case
+(`validate.rs`) — both because it's a good end-to-end check of §4 + §5b
+working together, and because it's exactly the kind of scheme this
+project exists to let a designer verify without a physical trial.
+
+**Not addressed by this round:** nothing in the engine yet *prevents* two
+different stitches from both claiming the same strand of the same target
+(e.g. two stitches both marked `FrontOnly` on the same stitch) — that
+would be a real pattern error, not just a geometry question, and would
+need its own consistency check (an extension of `validate.rs`, or a new
+checker) rather than falling out of the geometry/self-intersection work
+here. Flagged, not built.
+
 ## 6. Elasticity — a topology property, not a yarn property
 
 **Decision (2026-08-24, Owner):** the fabric's elasticity/stretchiness
@@ -409,3 +528,14 @@ objects.
   slightly-elastic constraint?) once this is actually scheduled — not
   needed before then, but M1's scheme object should already be a list of
   threads, not an implicit singleton.
+- Multi-way share fidelity (§5a): the "pointy tightened ring" look is
+  currently a narrower radius only, not a true per-stitch lean — flagged
+  as a known simplification, not verified against real crochet's actual
+  silhouette. Revisit if a future milestone (viewer/editor) needs the
+  visual shape to be more than "reads as roughly right."
+- Loop/strand consistency checking (§5b): nothing currently stops two
+  different stitches from both claiming the same strand (e.g. both
+  `FrontOnly`) of the same target, which would be a real pattern error.
+  No timeline requested — noted so it doesn't get assumed already covered
+  by the self-intersection checker (it isn't; that's a geometric check,
+  this would be a graph-consistency one).
