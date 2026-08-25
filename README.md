@@ -14,7 +14,7 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M4 done. `core/` (Rust) implements the insertion-graph engine — stitch
+M1–M5 done. `core/` (Rust) implements the insertion-graph engine — stitch
 registry, raw 3D placement (capacity-aware: an ordinary stitch validates
 ~7 shared siblings and correctly flags ~11+; a tightened magic ring reads
 as pointy at 3-5, flat at 6-8, wavy at 9+; front/back loop targeting is
@@ -22,12 +22,16 @@ geometrically real, supporting techniques like mosaic crochet), a mass-
 spring relaxation solve (stitch topology, not a separate material
 property, determines stretchiness), and self-intersection / stitch-count
 validation on the relaxed shape. `wasm/` bridges it to the browser via
-`wasm-bindgen`. `web/` is a minimal Next.js viewer rendering the relaxed
-yarn path in 3D, with a visible flag when validation finds a problem —
-see it running with the commands below. See `GOALS.md` → G-001 for the
-milestone plan and progress log, and known/deferred limitations (a dense
-round's several increases can still collide with a *neighbouring*
-increase — flagged, not yet fixed).
+`wasm-bindgen`, exposing one general `compute_scheme` call for whatever
+graph the UI builds. `web/` is a real scheme editor: add stitches, choose
+insertion targets/loop targets/capacity overrides, and watch the 3D
+render and validation update live — including a non-row (freeform) preset
+proving the model and editor aren't secretly row-locked — see it running
+with the commands below. See `GOALS.md` → G-001 for the milestone plan
+and progress log, and known/deferred limitations (a dense round's several
+increases can still collide with a *neighbouring* increase — flagged, not
+yet fixed; decrease/multi-target stitches get no capacity/ring geometric
+treatment).
 
 ## Run locally
 
@@ -57,6 +61,6 @@ npm run build
 npm run test:e2e      # Playwright — starts its own dev server on :3100
 ```
 
-No persistence, no scheme editor yet — `web/` renders two hardcoded demo
-schemes (a valid flat-circle start, and a deliberately overloaded ring
-that gets flagged) end to end. Editing (M5) and saving (M6) are next.
+No persistence yet — nothing saves or reloads a scheme (M6 is next). The
+editor itself is real: build a scheme from scratch, or start from one of
+four presets (flat circle, overloaded ring, shell, freeform spike).

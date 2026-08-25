@@ -69,7 +69,7 @@ sign-off before M1 starts):
       be built so a future flat/2D viewing mode (deferred — see
       `docs/crochet-context.md` §6a) is a plausible addition, not a
       rewrite.
-- [ ] M5 — Scheme editor UI: replace the hardcoded sample with an actual
+- [x] M5 — Scheme editor UI: replace the hardcoded sample with an actual
       editor for building the insertion graph directly (add stitches,
       choose insertion targets) that live-updates the relaxed 3D render
       and geometry check as the Owner edits. Must support at least one
@@ -81,6 +81,38 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-25 — **M5 done.** Replaced M4's hardcoded demo toggle with a
+  real editor (`web/components/SchemeEditor.tsx`): add a stitch by
+  picking kind/loop-target/capacity-override and checking earlier
+  stitches as targets, remove-last/clear, a live stitch list. The wasm
+  bridge grew a general `compute_scheme(wire)` API (`wasm/src/lib.rs`)
+  replacing M4's two hardcoded demo functions — it takes whatever the
+  editor built (as plain JSON, validated for forward-reference target
+  discipline) and runs it through the same core pipeline, live on every
+  edit. Four presets ship as starting points, one of them (`Freeform
+  spike (non-row)`) built specifically to satisfy this milestone's
+  freeform-scheme requirement: a `dc` at index 4 targets index 0, two
+  stitches further back than its immediate predecessor — not "the row
+  below" — and validates clean (`OK`, verified both by an assertion and
+  by eye in a real browser).
+  **A real gap in test coverage, caught by manual verification, not by
+  any automated check:** the freeform preset originally chosen (a
+  three-way cross-link: `dc` targeting `[2, 1]`) rendered as "Flagged (7
+  intersections)" in the browser — a genuine self-intersection, not a
+  UI bug — despite both its Rust wasm test and its Playwright e2e spec
+  passing, because neither ever asserted `ok`/`violation_count`, only
+  stitch count and one target label. A flagged flagship demo undermines
+  the very thing M5's acceptance criterion asks it to prove, so swapped
+  it for the simpler spike-stitch example above and strengthened both
+  tests to assert a clean result explicitly, with a comment recording
+  why, so this class of gap can't recur silently. Full account in
+  `HANDOVER.md`.
+  `cargo test` (44 core + 6 wasm), clippy, fmt, `npm run lint`, `npm run
+  build`, `npm run test:e2e` (5/5) all clean; the shipped state was also
+  exercised by hand in a real browser (all four presets, plus adding/
+  removing stitches manually), not just via the test suite. Next: M6
+  (persistence + deploy) — pending Owner sign-off on M5 first, per
+  standard milestone-boundary process.
 - 2026-08-25 — **M4 done.** New `wasm/` crate (`crochet-wasm`) and `web/`
   (Next.js/TS minimal viewer): a demo toggle, a react-three-fiber 3D
   viewport rendering the relaxed yarn path, a stats readout — the whole

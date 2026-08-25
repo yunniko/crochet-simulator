@@ -352,8 +352,82 @@ oversight later.
 --all`, `npm run lint`, `npm run build`, and `npm run test:e2e` (3/3) all
 clean as of this milestone.
 
-Not started: M5 (scheme editor UI) onward. Goal G-001's 6-milestone plan
-is in `GOALS.md`, approved by the Owner 2026-08-24.
+**M5 done (2026-08-25): scheme editor UI.** Replaces M4's hardcoded
+demo-toggle viewer with a real editor.
+
+**`wasm/` — general `compute_scheme` API, replacing the two M4 demo
+functions.** `wasm/src/lib.rs` now exposes one `#[wasm_bindgen]` function,
+`compute_scheme(wire: JsValue) -> Result<JsValue, JsValue>`, taking a
+`WireScheme` (plain `kind`/`targets`/`loop_target`/`capacity_override`
+JSON, mirrored by hand in `web/lib/wasm/index.ts` — no shared codegen yet,
+same as M4's DTOs). `build_scheme_from_wire` validates the forward-
+reference discipline the whole model relies on (§4: a target must already
+be placed) and returns a clear string error — surfaced to the Owner
+directly, not a panic — for a bad kind, an unknown enum value, or a
+forward reference. M4's two demo builders (`build_flat_circle_scheme`,
+`build_overloaded_ring_scheme`) stay as internal test fixtures (no longer
+`#[wasm_bindgen]`-exported) since they're still useful known-good/known-
+bad regression cases.
+
+**`web/` — `SchemeEditor` component + preset library.**
+`web/components/SchemeEditor.tsx`: a form (kind, loop target, capacity
+override, a checkbox list of every existing stitch as a target candidate)
+plus add/remove-last/clear, and a live `<ol>` stitch list. `app/page.tsx`
+holds the `stitches` array as the one source of truth and recomputes via
+`compute_scheme` on every change (a `useEffect` keyed on `stitches`,
+deliberately *not* resetting `result`/`error` synchronously first — that
+tripped the same `react-hooks/set-state-in-effect` ESLint rule M4 hit;
+fixed the same way, by gating the empty-state UI on `stitches.length`
+directly instead of on state that would need resetting). `web/lib/
+presets.ts` (new) holds four starting-point schemes as plain data, each
+wired to a header button: the M4 flat-circle and overloaded-ring demos
+(unchanged), a 3-`tr`-into-one-chain shell, and a freeform (non-row)
+example — see below.
+
+**A real gap in test coverage, found by manual browser verification, not
+by any automated check.** The freeform preset originally built to satisfy
+this milestone's explicit requirement ("must support at least one
+non-row-based scheme... to prove the editor isn't secretly row-locked")
+was a three-way cross-link (`ch`, `tr`→0, `dc`→0, `dtr`→1, `dc`→`[2,1]`) —
+structurally identical to `crochet-core`'s own `freeform_scheme_with_no_
+row_structure_places_successfully` test. Both a new Rust wasm test
+(`wire_scheme_supports_freeform_non_row_targeting`) and a new Playwright
+spec were written for it and both passed — but neither ever asserted
+`ok`/`violation_count`, only stitch count and one target's label (the
+Rust test came directly from that pre-existing core test, which itself
+only ever checked placement succeeds and geometry is finite — never
+self-intersection — so the gap propagated forward without anyone
+deliberately deciding to skip that check). Manually verifying all four
+presets in a real browser (per Company standard: "changes are verified by
+running them") surfaced that this preset actually renders "Flagged (7
+intersections)" — a genuine self-intersection (plausibly involving the
+last stitch's `[2, 1]` decrease-like cross-link, since decreases/multi-
+target stitches get no capacity/ring geometric treatment — a known,
+documented limitation, see above), not a bug in the flag itself. A
+flagged flagship demo undermines rather than proves the milestone's own
+acceptance criterion, so replaced it with a simpler, genuinely non-row
+example instead: a spike stitch (`ch`, `ch`, `ch`, `dc`→2 [ordinary], `dc`
+→0 [a spike, two stitches further back than its immediate predecessor]) —
+validates clean, confirmed both by a strengthened assertion and by eye.
+Both the Rust and Playwright tests for this preset now assert the clean
+result explicitly (`assert!(result.ok)` / `expect(...).toHaveText("OK")`),
+with a comment recording why, specifically so a scheme that merely
+*builds* without asserting it *validates* can't pass as "proof" again.
+
+**Testing.** Playwright e2e (`web/tests/e2e/viewer.spec.ts`, 5 specs, was
+3): default preset clean, overloaded-ring flagged, the freeform spike
+preset validates clean (see above), clearing and adding a stitch by hand,
+remove-last. Still no Vitest layer — `SchemeEditor`'s logic is thin enough
+(form state + array splice) that it doesn't yet meet the "real TS business
+logic" bar `web/AGENTS.md` set as the trigger for adding one; revisit if
+that changes. `cargo test` (44 core + 6 wasm), `cargo clippy
+--all-targets`, `cargo fmt --all`, `npm run lint`, `npm run build`, `npm
+run test:e2e` (5/5) all clean. Also manually exercised in a real browser:
+all four presets (including the swapped-in freeform spike, confirmed
+clean/white segments not red), plus clearing and hand-adding a stitch.
+
+Not started: M6 (persistence + deploy) onward. Goal G-001's 6-milestone
+plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 
 ## Decision record
 
@@ -411,25 +485,27 @@ step would.
   M2), continuous relaxed-path reconstruction (`path.rs`, M3), and
   self-intersection/count validation on that path (§8, `validate.rs`, M3).
   Pure Rust, unit-testable without any UI, no dependency on `wasm`/`web`.
-- `wasm/` (M4) — thin `wasm-bindgen` crate: builds hardcoded demo schemes,
-  runs them through `core`'s exact pipeline, serialises the relaxed path +
-  flagged-segment info to JS via `serde-wasm-bindgen`. No scheme-building
-  logic of its own.
-- `web/` (M4) — Next.js/TypeScript app: currently a **minimal viewer**
-  (a demo toggle, a react-three-fiber 3D viewport, a stats readout) — not
-  yet a scheme editor. M5 adds real editing; it must not assume row/round
-  structure when it does — see D4 below.
+- `wasm/` (M4, generalised M5) — thin `wasm-bindgen` crate: one exported
+  `compute_scheme(wire)` taking whatever stitch graph the editor built (as
+  plain JSON), running it through `core`'s exact pipeline, and serialising
+  the relaxed path + flagged-segment info back to JS via
+  `serde-wasm-bindgen`. No scheme-building logic of its own — `web/` owns
+  the stitch list, this crate only ever computes.
+- `web/` (M4 minimal viewer, M5 real editor) — Next.js/TypeScript app: a
+  `SchemeEditor` component for building the insertion graph stitch by
+  stitch (kind, targets, loop target, capacity override), a react-three-
+  fiber 3D viewport of the live-relaxed shape, a stats readout, and a
+  preset library (`lib/presets.ts`) of starting-point schemes including a
+  non-row-based one — confirms the model/editor genuinely isn't row-locked
+  per D4 below, not just in the core engine but end-to-end through the UI.
 
 ## Next steps
 
-M4 (WASM bridge + minimal viewer): compile `core` to WASM
-(`wasm-bindgen`), wire it into a minimal Next.js/TS app with a 3D
-viewport (three.js / react-three-fiber) rendering a hardcoded sample
-scheme end-to-end in the browser — the *relaxed* (M2) shape, with a
-visible flag when M3's validator detects a problem. This is the first
-milestone that touches `web/` / TypeScript at all; nothing exists there
-yet. Per `docs/crochet-context.md` §6a, don't build the viewport in a way
-that assumes unconstrained-3D-only.
+M6 (persistence + deploy): save/load schemes to Postgres (matching the
+portfolio's existing pattern — see `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`),
+then deploy following the standard pattern there, verified end-to-end in a
+browser against the live URL. Pending Owner sign-off on M5 first, per
+standard milestone-boundary process.
 
 ## Domain reference
 

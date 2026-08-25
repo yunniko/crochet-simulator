@@ -2,23 +2,22 @@
 /* eslint-disable */
 
 /**
- * A clean, validating demo scheme (a standard flat-circle start).
+ * The M5 API: computes whatever scheme the editor has built so far.
+ * Errors (a bad stitch kind, a forward target reference, an unplaced
+ * target) come back as a rejected promise on the JS side with a message
+ * good enough to show the Owner directly, not a generic failure.
  */
-export function compute_flat_circle_demo(): any;
-
-/**
- * A deliberately overloaded demo scheme, expected to be flagged.
- */
-export function compute_overloaded_demo(): any;
+export function compute_scheme(wire: any): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly compute_flat_circle_demo: () => [number, number, number];
-    readonly compute_overloaded_demo: () => [number, number, number];
+    readonly compute_scheme: (a: any) => [number, number, number];
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbindgen_start: () => void;

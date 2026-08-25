@@ -1,7 +1,4 @@
-import init, {
-  compute_flat_circle_demo,
-  compute_overloaded_demo,
-} from "./crochet_wasm";
+import init, { compute_scheme } from "./crochet_wasm";
 
 export interface WasmVec3 {
   x: number;
@@ -18,7 +15,7 @@ export interface WasmSegment {
   label: string;
 }
 
-export interface DemoResult {
+export interface ComputeResult {
   stitch_count: number;
   ok: boolean;
   violation_count: number;
@@ -42,12 +39,33 @@ function ensureInit(): Promise<unknown> {
   return initPromise;
 }
 
-export async function loadFlatCircleDemo(): Promise<DemoResult> {
+export async function computeScheme(scheme: WireScheme): Promise<ComputeResult> {
   await ensureInit();
-  return compute_flat_circle_demo() as DemoResult;
+  return compute_scheme(scheme) as ComputeResult;
 }
 
-export async function loadOverloadedDemo(): Promise<DemoResult> {
-  await ensureInit();
-  return compute_overloaded_demo() as DemoResult;
+// --- Wire format (mirrors wasm/src/lib.rs's WireStitch/WireScheme by
+// hand — no shared codegen for these yet, see web/AGENTS.md) ---
+
+export type StitchKind = "ch" | "ss" | "dc" | "htr" | "tr" | "dtr" | "trtr" | "quad_tr" | "mr";
+
+export const STITCH_KINDS: StitchKind[] = ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr", "mr"];
+
+export type LoopTarget = "Both" | "FrontOnly" | "BackOnly" | "FrontPost" | "BackPost";
+
+export const LOOP_TARGETS: LoopTarget[] = ["Both", "FrontOnly", "BackOnly", "FrontPost", "BackPost"];
+
+export type CapacityStyle = "Fixed" | "Elastic" | "TightenedRing";
+
+export const CAPACITY_STYLES: CapacityStyle[] = ["Fixed", "Elastic", "TightenedRing"];
+
+export interface WireStitch {
+  kind: StitchKind;
+  targets: number[];
+  loop_target?: LoopTarget;
+  capacity_override?: CapacityStyle;
+}
+
+export interface WireScheme {
+  stitches: WireStitch[];
 }
