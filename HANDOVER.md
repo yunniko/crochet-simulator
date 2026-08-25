@@ -239,6 +239,21 @@ not a geometric one, and is a different piece of work from anything here.
 44 unit tests total (was 42), clean under `cargo clippy --all-targets`,
 `cargo fmt` applied.
 
+**Viewer/highlighting design intent captured (2026-08-25, Owner) —
+documentation only, nothing built.** For whenever M4/M5 actually happen:
+default highlighting shows a stitch's loop, or its leg/post if it has one
+distinct from the loop; an opt-in detailed view highlights every point
+where the folded yarn touches itself as its own part — which turns out to
+map directly onto `crate::path`/`crate::validate`'s existing raw-
+coincidence machinery (§8 invariant 4's "same structural point" check),
+not a new concept to invent when the time comes. Also flagged: "every
+hole can be a target" splits into two cases — chain-marked holes (already
+fully supported, `ch` is `Elastic`) vs. holes with no stitch marking them
+at all (filet-mesh-style gaps), which would need a genuinely new *derived/
+virtual* target-reference concept, distinct from `StitchRef` — real
+architecture work for whenever the editor's interaction model is actually
+designed, not attempted now. Full writeup: `docs/crochet-context.md` §5c.
+
 Not started: M4 (WASM bridge + minimal viewer) onward. Goal G-001's
 6-milestone plan is in `GOALS.md`, approved by the Owner 2026-08-24.
 

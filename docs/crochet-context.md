@@ -377,6 +377,41 @@ need its own consistency check (an extension of `validate.rs`, or a new
 checker) rather than falling out of the geometry/self-intersection work
 here. Flagged, not built.
 
+## 5c. Highlighting/inspection granularity (viewer, deferred)
+
+**Decision (2026-08-25, Owner)** — for M4/M5 (no viewer exists yet, so
+nothing here is built; captured now so the design intent isn't lost):
+
+- **Default view**: a stitch highlights as **its loop** (the top "V"), or
+  **its leg/post** when it has one distinct from the loop (`tr` and
+  taller — the same "post" `FrontPost`/`BackPost` already attach to, §2).
+  These are the two coarse, always-available regions of any tall stitch.
+- **Detailed view** (opt-in): every point where the yarn, once folded/
+  relaxed, **touches itself** becomes its own separately highlightable
+  part. This maps directly onto engine machinery that already exists for
+  a different purpose: `crate::path`'s raw-placement point coincidence
+  (`crate::validate`'s adjacency rule, §8 invariant 4) already identifies
+  exactly this — "these two points in the yarn's path are the same
+  structural point" — for deciding what's *not* a self-intersection. The
+  detailed highlighting view is essentially a UI presentation of that
+  same underlying structure, not a new geometric concept to invent.
+- **"Every hole between threads can be a target."** Two readings worth
+  keeping distinct when the editor (M5) is actually designed:
+  - A hole **marked by an explicit chain** (a "ch-1 space," "ch-3
+    corner space," etc.) — already fully supported: `ch` is `Elastic`
+    (§5a), so it comfortably accepts however many stitches a scheme calls
+    for, from a granny square's 3 up to whatever lace needs. No new work.
+  - A hole **not marked by any stitch at all** — e.g. a skipped-stitch
+    gap in filet mesh, or a gap that emerges purely from a decrease's
+    geometry — has no `StitchRef` for anything to target, because nothing
+    was placed there. Supporting this as a real target (not just "point
+    the editor at empty space and let the user pretend") would mean a new
+    kind of target reference — a *derived/virtual* anchor computed from
+    the stitches that bound the gap, distinct from `StitchRef` — which is
+    a genuine architectural addition, not a tuning fix. Not attempted
+    here; flagged for real design work whenever the editor's interaction
+    model is actually being built, rather than guessed at now.
+
 ## 6. Elasticity — a topology property, not a yarn property
 
 **Decision (2026-08-24, Owner):** the fabric's elasticity/stretchiness

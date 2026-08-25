@@ -81,6 +81,14 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-25 — Owner described viewer/highlighting intent for M4/M5
+  (default: loop or leg/post; detailed opt-in: every self-touch point of
+  the folded yarn as its own highlightable part) and flagged that "every
+  hole between threads can be a target" — split in the doc into
+  chain-marked holes (already supported) vs. unmarked holes (filet-mesh
+  style, would need a new derived/virtual target concept). Documentation
+  only — `docs/crochet-context.md` §5c — nothing built, no viewer exists
+  yet.
 - 2026-08-25 — Owner gave a precise description of front/back loop
   mechanics (front strand faces right relative to crocheting direction,
   back faces left; using one strand leaves the other genuinely free for a
