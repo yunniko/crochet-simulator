@@ -2,10 +2,12 @@
 /target/
 **/target/
 
-# Node / web (added in a later milestone)
+# Node / web (web/, added M4)
 node_modules/
 .next/
 out/
+/web/test-results/
+/web/playwright-report/
 
 # Env
 .env

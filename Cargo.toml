@@ -1,6 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["core"]
-
-# Future members (not yet added): a `wasm` crate wrapping `core` with
-# wasm-bindgen (M4), added when that milestone starts — see GOALS.md.
+members = ["core", "wasm"]

@@ -258,8 +258,102 @@ virtual* target-reference concept, distinct from `StitchRef` — real
 architecture work for whenever the editor's interaction model is actually
 designed, not attempted now. Full writeup: `docs/crochet-context.md` §5c.
 
-Not started: M4 (WASM bridge + minimal viewer) onward. Goal G-001's
-6-milestone plan is in `GOALS.md`, approved by the Owner 2026-08-24.
+**M4 done (2026-08-25): WASM bridge + minimal viewer.** First milestone
+touching `wasm/` and `web/` — nothing existed there before this.
+
+**`wasm/` (new crate, `crochet-wasm`).** Deliberately thin: builds two
+hardcoded demo schemes, runs each through the exact same core pipeline
+`crochet-core`'s own tests use (raw placement → relaxation → validation),
+and hands the *relaxed* yarn path plus which segments are flagged back to
+JS as plain serialisable data (`serde` + `serde-wasm-bindgen`, DTOs kept
+separate from `crochet-core`'s own types so the core crate stays
+dependency-free). No scheme-building/editing capability — that's M5.
+Two demos: `compute_flat_circle_demo` (magic ring + 6 dc round 1 — clean,
+validates ok) and `compute_overloaded_demo` (15 dc into one ring — flagged,
+proving the "visible flag" path actually lights up, not just the clean
+path). Toolchain: `wasm32-unknown-unknown` target via `rustup target add`,
+`wasm-bindgen-cli` installed via `cargo install wasm-bindgen-cli --version
+<matching the wasm-bindgen crate version exactly> --locked` (version
+mismatch between the crate and the CLI is a real footgun — pin both).
+Rebuild command is in the root `README.md`.
+
+**A real bug found building the demo, not a WASM/web issue at all:**
+building a proper flat-circle demo (ring round 1 + a plain round-2
+increase) surfaced the local-density limitation now documented in
+`docs/crochet-context.md` §5a — round 2's increases, each fine against
+their own target, collided with *neighbouring* increases' children. Tried
+tuning constants first (several rounds — angular step, radius); each fix
+shifted the problem rather than solving it, and one attempt (coupling
+`Elastic`'s radius growth to the same constant `TightenedRing` uses)
+silently broke `TightenedRing`'s narrow/flat calibration until a test
+caught it. Landed on a real, principled fix instead of more tuning:
+`Fixed` targets (ordinary increases) fan out gradually now, `Elastic`/
+`TightenedRing` targets (rings, chain-spaces — genuinely isolated rounds)
+always wrap the full circle regardless of size — see §5a's "Geometric
+mechanism" for the full account. The cross-*target* density problem
+itself (as opposed to the within-target angle problem, which this fixed)
+is still open — M4's shipped demo deliberately stops at round 1 to avoid
+it rather than pretending it's solved.
+
+**`web/` (new Next.js/TS app).** Minimal viewer: a dark-themed page with
+a toggle between the two demos, a react-three-fiber `<Canvas>` rendering
+the relaxed yarn path as line segments (ordinary vs. flagged, different
+colours), and a stats readout (stitch count, ok/flagged + violation
+count) — a light echo of the "Model Statistics" panel in the Owner's UI
+mockups (2026-08-25; full Blender-style layout — scene tree, properties
+panel, modeling-tools stack — is real reference for M5's editor, well
+beyond M4's minimal scope, not attempted here). WASM bindings live in
+`lib/wasm/` (generated files + one hand-written loader/types file, see
+`web/AGENTS.md`).
+
+**Three real bugs hit and fixed while verifying this in an actual
+browser** (per the Company standard: "verified by running them," not
+just written and assumed working) — worth recording since none were
+obvious from the app's own behaviour:
+1. **Turbopack build failure** on the wasm-bindgen-generated `new
+   URL('crochet_wasm_bg.wasm', import.meta.url)` call: it statically
+   analyses that pattern to bundle the `.wasm` as an asset, which only
+   works if the file is physically *next to* the JS glue — routing it
+   through `public/` instead broke the resolution. Fixed by keeping
+   `crochet_wasm_bg.wasm` alongside `crochet_wasm.js` in `lib/wasm/` and
+   calling `init()` with no explicit path (its default resolution is
+   exactly the pattern the bundler expects).
+2. **`allowedDevOrigins`**: Next's dev-origin check silently 403s every
+   JS chunk when the dev server is reached via `127.0.0.1` instead of
+   `localhost` (which is how Playwright's `webServer` drives it) — the
+   app doesn't error, it just hangs forever at "Computing scheme…" with
+   no visible cause. Found by capturing console/network activity during
+   a failing e2e run, not from the app's own behaviour. Fixed with
+   `allowedDevOrigins: ["127.0.0.1"]` in `next.config.ts`.
+3. **Automated screenshots came back solid black** even though the app
+   was rendering correctly the whole time (confirmed via `canvas.
+   toDataURL()` returning real, changing image data) — a known CDP/
+   screenshot-tooling quirk with WebGL canvases that don't set
+   `preserveDrawingBuffer`. Fixed by setting `gl={{ preserveDrawingBuffer:
+   true }}` on the `<Canvas>`, which also happens to be generally useful
+   for any future "export view" feature. Verified visually afterward:
+   both demos render correctly (a small zigzag flat-circle shape; a
+   denser, partly-red-highlighted overloaded ring), and `OrbitControls`
+   camera rotation works.
+
+**Testing.** Playwright e2e (`web/tests/e2e/viewer.spec.ts`, 3 specs)
+asserting on the stats-readout text as a reliable proxy for "the WASM
+pipeline actually ran and produced the right result" — not on canvas
+pixels, since verifying the *3D render itself* looks right needs real
+visual review (done manually above), not something a DOM assertion can
+meaningfully check. No Vitest unit-test layer yet: there's no TS business
+logic worth unit-testing until M5 adds real scheme-editing logic; all the
+actual business logic so far lives in `core/`'s 44 Rust unit tests (the
+`Fixed`-vs-`Elastic` angle fix was caught by existing tests, not new
+ones). `web/AGENTS.md` records this reasoning so it isn't mistaken for an
+oversight later.
+
+`cargo test` (44 core + 2 wasm), `cargo clippy --all-targets`, `cargo fmt
+--all`, `npm run lint`, `npm run build`, and `npm run test:e2e` (3/3) all
+clean as of this milestone.
+
+Not started: M5 (scheme editor UI) onward. Goal G-001's 6-milestone plan
+is in `GOALS.md`, approved by the Owner 2026-08-24.
 
 ## Decision record
 
@@ -309,20 +403,22 @@ step would.
 
 ## How things fit together
 
-Not yet built. Planned shape (subject to revision as M1 proceeds):
 - `core/` — Rust crate: an **insertion graph** of stitch instances (working
   order + insertion-target edges — see `docs/crochet-context.md` §4,
-  `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), raw
-  placement geometry (`geometry.rs`, M1), a mass-spring relaxation/
-  elasticity solve (§6, `relax.rs`, M2), continuous relaxed-path
-  reconstruction (`path.rs`, M3), and self-intersection/count validation
-  on that path (§8, `validate.rs`, M3 — all done). Pure Rust,
-  unit-testable without any UI, compiled to WASM (`wasm-bindgen`) for the
-  browser eventually (M4).
-- `web/` — Next.js/TypeScript app: scheme editor UI + a 3D viewport
-  (likely three.js / react-three-fiber) that calls into the WASM core and
-  renders its output, highlighting any flagged geometry problems. The
-  editor must not assume row/round structure — see D4 below.
+  `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), capacity-
+  aware raw placement geometry (§5a, `geometry.rs`, M1), a mass-spring
+  relaxation/elasticity solve with sibling repulsion (§6, §5a, `relax.rs`,
+  M2), continuous relaxed-path reconstruction (`path.rs`, M3), and
+  self-intersection/count validation on that path (§8, `validate.rs`, M3).
+  Pure Rust, unit-testable without any UI, no dependency on `wasm`/`web`.
+- `wasm/` (M4) — thin `wasm-bindgen` crate: builds hardcoded demo schemes,
+  runs them through `core`'s exact pipeline, serialises the relaxed path +
+  flagged-segment info to JS via `serde-wasm-bindgen`. No scheme-building
+  logic of its own.
+- `web/` (M4) — Next.js/TypeScript app: currently a **minimal viewer**
+  (a demo toggle, a react-three-fiber 3D viewport, a stats readout) — not
+  yet a scheme editor. M5 adds real editing; it must not assume row/round
+  structure when it does — see D4 below.
 
 ## Next steps
 

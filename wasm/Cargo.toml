@@ -1,0 +1,14 @@
+[package]
+name = "crochet-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WASM bridge exposing crochet-core to the web viewer (M4)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crochet-core = { path = "../core" }
+wasm-bindgen = "=0.2.127"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"

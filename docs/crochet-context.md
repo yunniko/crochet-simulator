@@ -329,17 +329,43 @@ Owner's own numbers for both (7 hard-but-possible; 6-8 the ring's flat
 range) sit close together — no separate tuning needed per target kind.
 
 **Geometric mechanism.** Siblings sharing a target are placed **radially**
-around it (an angle per sibling, `2*PI*index/total`), not linearly along
-one axis — a linear offset has no way to represent "opens into a wide
-circle" or "ripples in 3D," and (see `HANDOVER.md`) turned out to let
-non-adjacent siblings fold into each other during relaxation, since
-nothing but the linear ordering related them at all. The relaxation
-solver (§6) also gained an explicit **repulsion** between every pair of
-stitches sharing a target, active only once they're closer than a minimum
-distance — springs alone only relate a stitch to its own target and its
-immediate working-order neighbour, never to siblings further round a
-wide fan, so nothing stopped a wide share from folding onto itself before
-this was added.
+around it, not linearly along one axis — a linear offset has no way to
+represent "opens into a wide circle" or "ripples in 3D," and (see
+`HANDOVER.md`) turned out to let non-adjacent siblings fold into each
+other during relaxation, since nothing but the linear ordering related
+them at all. The relaxation solver (§6) also gained an explicit
+**repulsion** between every pair of stitches sharing a target, active
+only once they're closer than a minimum distance — springs alone only
+relate a stitch to its own target and its immediate working-order
+neighbour, never to siblings further round a wide fan, so nothing stopped
+a wide share from folding onto itself before this was added.
+
+The angle itself is **not** simply `2*PI*index/total` for every target
+kind (found while building M4's demo scheme, a magic-ring flat circle):
+that wraps every group around a full circle regardless of size, which is
+right for a target that genuinely represents "the whole round" (`Elastic`
+and `TightenedRing` — nothing else is nearby to collide with) but wrong
+for an ordinary `Fixed` increase into one existing stitch in the middle of
+an otherwise dense round, where it let one increase's far sibling swing
+into a *neighbouring* increase's territory. So: `Fixed` targets fan out
+gradually (a fixed angular step per sibling) for as long as that stays
+under a full turn, only wrapping the full circle once the group is large
+enough that it would anyway (matching `COMFORTABLE_CAPACITY`'s own
+regime); `Elastic`/`TightenedRing` targets always wrap the full circle,
+at any size, since they represent an isolated round, not an increase
+embedded in one.
+
+**Known, deferred limitation — local density across *different* targets.**
+This model still doesn't reason about how close two *different* targets
+are to each other: a dense round's several increases, each individually
+correctly placed against *its own* target, can still collide with a
+*neighbouring* increase's children if the round is tight enough (found
+building M4's demo — a magic ring's round 1 plus a plain round-2 increase
+overlapped, so the shipped M4 demo deliberately stops at round 1). Fixing
+this properly needs the placement/relaxation to be aware of nearby
+targets' occupancy, not just a single target's own sibling count —
+real, scoped follow-up work, not a tuning fix (constant-tuning was tried
+and made other cases worse). Not fixed as of M4; see `HANDOVER.md`.
 
 **Known simplification, stated plainly:** the "pointy" look for a
 lightly-loaded tightened ring is modelled only as a *narrower radius*
@@ -593,3 +619,9 @@ objects.
   No timeline requested — noted so it doesn't get assumed already covered
   by the self-intersection checker (it isn't; that's a geometric check,
   this would be a graph-consistency one).
+- Local density across different targets (§5a): a dense round's several
+  increases can collide with a *neighbouring* increase, since placement
+  only reasons about siblings of the same target. M4's demo deliberately
+  stops at round 1 of a flat circle to avoid shipping a scheme that hits
+  this. No timeline requested — worth prioritising before M5's editor
+  lets an Owner build a real multi-round piece and hit it directly.

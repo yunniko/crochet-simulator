@@ -61,7 +61,7 @@ sign-off before M1 starts):
       the specific problem location for a set of known-good and known-bad
       test schemes, including at least one post-stitch case that must
       *not* false-positive.
-- [ ] M4 — WASM bridge + minimal viewer: compile the core to WASM
+- [x] M4 — WASM bridge + minimal viewer: compile the core to WASM
       (wasm-bindgen), wire it into a minimal Next.js/TS app with a 3D
       viewport (three.js / react-three-fiber) rendering a hardcoded sample
       scheme end-to-end in the browser, including the relaxed (not raw)
@@ -81,6 +81,31 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-25 — **M4 done.** New `wasm/` crate (`crochet-wasm`) and `web/`
+  (Next.js/TS minimal viewer): a demo toggle, a react-three-fiber 3D
+  viewport rendering the relaxed yarn path, a stats readout — the whole
+  `core` → WASM → browser pipeline proven end-to-end, verified visually
+  in a real browser (not just tests): a clean flat-circle demo and a
+  deliberately overloaded, correctly-flagged ring demo both render and
+  interact (camera orbit) correctly. Building the demo surfaced a real
+  bug in M1/M2's placement (siblings sharing a target always wrapped a
+  full circle regardless of size, letting a dense round's increases
+  collide with *neighbouring* increases) — fixed by making `Fixed`
+  targets fan out gradually while `Elastic`/`TightenedRing` targets keep
+  wrapping the full circle (they represent an isolated round, not an
+  embedded increase); full account and the still-open cross-target
+  density limitation in `HANDOVER.md` and `docs/crochet-context.md` §5a.
+  Also hit and fixed three real bugs verifying in-browser: a Turbopack
+  build failure (wasm asset resolution), Next's `allowedDevOrigins`
+  silently hanging the app under Playwright, and automated screenshots
+  reading a stale WebGL buffer (`preserveDrawingBuffer`) — none obvious
+  from the app's own behaviour, all recorded in `HANDOVER.md`/
+  `web/AGENTS.md` so they aren't rediscovered from scratch. Playwright
+  e2e (3 specs) added; Vitest deliberately not yet (no TS business logic
+  to unit-test until M5). `cargo test` (44 core + 2 wasm), clippy, fmt,
+  `npm run lint`, `npm run build` all clean. Next: M5 (scheme editor UI)
+  — should also prioritise the cross-target density limitation before an
+  Owner can hit it directly by building a real multi-round piece.
 - 2026-08-25 — Owner corrected a documentation inaccuracy: a magic ring
   is a single loop of working yarn, not formed from chains — a genuinely
   different real-world construction from `ch`, despite the two sharing
