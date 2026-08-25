@@ -225,15 +225,22 @@ mod tests {
         // "hard but possible," 11 "won't fit physically." Confirms the
         // whole pipeline (radial placement + capacity styles + relaxation
         // with sibling repulsion) lands on the same boundary end-to-end,
-        // not just in isolated unit checks of the pieces.
+        // not just in isolated unit checks of the pieces. The target must
+        // be an actual ordinary stitch (`Fixed` capacity, docs §5a) — an
+        // earlier version of this test anchored on the foundation `ch`
+        // instead (`Elastic`), which never really exercised the "won't
+        // fit" pathway it claimed to.
         let registry = crate::stitch::StitchRegistry::with_uk_basics();
         let validate_shell = |count: usize| -> bool {
             let mut thread = Thread::new();
-            thread.stitches.push(StitchInstance::new(CH, vec![]));
+            thread.stitches.push(StitchInstance::new(CH, vec![])); // 0: anchor
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![ref_at(0)])); // 1: the Fixed-capacity target
             for _ in 0..count {
                 thread
                     .stitches
-                    .push(StitchInstance::new(DC, vec![ref_at(0)]));
+                    .push(StitchInstance::new(DC, vec![ref_at(1)]));
             }
             let mut scheme = Scheme::new();
             scheme.add_thread(thread);

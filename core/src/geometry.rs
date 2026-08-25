@@ -30,9 +30,18 @@ const COMFORTABLE_CAPACITY: usize = 7;
 /// `Fixed` target, and the radius a `TightenedRing` plateaus at once it
 /// reaches comfortable capacity.
 const BASE_RING_RADIUS: f64 = 0.4;
-/// Target arc-length between adjacent siblings used to *grow* a radius
-/// with sibling count (`Elastic`, and `TightenedRing` below its plateau).
+/// Target arc-length between adjacent siblings used to *grow* a
+/// `TightenedRing`'s radius with sibling count, below its plateau (docs
+/// §5a: narrow at 3-5 siblings, reaching the flat plateau by 6-8).
 const MIN_STITCH_ARC_WIDTH: f64 = 0.5;
+/// Same idea as `MIN_STITCH_ARC_WIDTH`, but for `Elastic` targets (`ch`,
+/// an open ring) — deliberately a *separate* constant, not shared with
+/// `MIN_STITCH_ARC_WIDTH`: they were coupled once, and widening it to fix
+/// an `Elastic`-target near-miss immediately broke `TightenedRing`'s
+/// narrow/flat calibration, which reads that same constant. `Elastic`
+/// targets have no plateau to protect and no Owner-specified narrow/flat
+/// boundary to hit, so this can be tuned purely for clearance.
+const ELASTIC_ARC_WIDTH: f64 = 0.9;
 /// Maximum out-of-plane bulge for siblings past comfortable capacity on a
 /// `Fixed` or `TightenedRing` target — a 3D wave/ripple, not in-plane
 /// crowding. Deliberately bounded (see `radius_and_wave`): capacity
@@ -95,15 +104,78 @@ impl PlacedScheme {
     }
 }
 
+/// The comfortable angular gap between adjacent siblings before a target
+/// is under any strain. Used to fan a *small* group of siblings out
+/// gradually (see `sibling_angle`) instead of always wrapping a full
+/// circle. Deliberately a standalone constant, not derived from
+/// `MIN_STITCH_ARC_WIDTH`/`BASE_RING_RADIUS` (arc-length-per-radian):
+/// that coupling means widening the radius to fix one near-miss *shrinks*
+/// this angle and can reopen another — confirmed empirically when tuning
+/// this. The angular gap and the radius address different failure modes
+/// (own-body-vs-neighbouring-bridge separation vs. general crowding) and
+/// need to be tunable independently.
+const COMFORTABLE_ANGULAR_STEP: f64 = 1.25;
+
+/// This sibling's angular position around its target. **Not** simply
+/// `2*PI*index/total` for every target kind: that wraps every group
+/// around a full circle regardless of size, which is right for a target
+/// that genuinely represents "the whole round" (a ring or chain-space,
+/// §5a) — nothing else is nearby to collide with — but wrong for an
+/// ordinary small increase into one existing stitch in the middle of an
+/// otherwise dense round. An increase of 2 into a `dc` mid-round should
+/// land its second stitch a modest step away from the first, not swing to
+/// the diametrically opposite side, where it can collide with the
+/// *neighbouring* increase's own children — confirmed concretely with a
+/// full flat-circle scheme (magic ring, several-stitch round 1, a plain
+/// 2-in-each round 2): full-circle wrapping for round 2's increases put
+/// adjacent increases' far siblings close enough to *each other* to trip
+/// M3, even though every individual increase was fine in isolation.
+/// Conversely, forcing the *ring's own* round to fan narrowly instead of
+/// wrapping produced an obviously wrong lopsided partial arc instead of
+/// an actual round.
+///
+/// So: `Fixed` targets (ordinary stitches — the usual increase case) fan
+/// out at `COMFORTABLE_ANGULAR_STEP` per sibling, starting from
+/// `index == 0` at angle 0 (preserving the exact-coincidence case §8
+/// invariant 2 relies on for a target's sole/first user), for as long as
+/// that stays under a full turn, falling back to full-circle even spacing
+/// once the group is large enough that it would wrap past 2*PI anyway
+/// (`COMFORTABLE_CAPACITY`'s regime, matching `radius_and_wave`'s own
+/// capacity/overflow split). `Elastic` and `TightenedRing` targets always
+/// wrap the full circle, at any size — they represent an isolated
+/// round/space, not an increase embedded in one.
+fn sibling_angle(style: CapacityStyle, index: usize, total: usize) -> f64 {
+    if total <= 1 {
+        return 0.0;
+    }
+    let full_wrap = 2.0 * PI * index as f64 / total as f64;
+    if style != CapacityStyle::Fixed {
+        return full_wrap;
+    }
+    // Compare against `total` steps, not `total - 1`: the fan's *last*
+    // sibling and its wrap-around back to the first need at least one
+    // comfortable step of clearance too, or a fan that just barely fits
+    // under a full turn (e.g. 6 siblings at 1.25 rad each = 7.5 rad, only
+    // just past 2*PI) would leave its two ends almost coincident instead
+    // of comfortably spaced — caught by a real test at exactly 6 siblings
+    // into a magic ring.
+    if total as f64 * COMFORTABLE_ANGULAR_STEP < 2.0 * PI {
+        COMFORTABLE_ANGULAR_STEP * index as f64
+    } else {
+        full_wrap
+    }
+}
+
 /// How far out (radius) and how far out of plane (z) a sibling at
 /// `sibling_index` of `total` sharing one target should sit, given the
-/// target's `CapacityStyle` (docs §5a). `angle` is this sibling's position
-/// around the ring, `2*PI*sibling_index/total`.
+/// target's `CapacityStyle` (docs §5a). `angle` is this sibling's
+/// position around the ring — see `sibling_angle`.
 fn radius_and_wave(style: CapacityStyle, total: usize, angle: f64) -> (f64, f64) {
-    let grown_radius = total as f64 * MIN_STITCH_ARC_WIDTH / (2.0 * PI);
-
     match style {
-        CapacityStyle::Elastic => (grown_radius, 0.0),
+        CapacityStyle::Elastic => {
+            let grown_radius = total as f64 * ELASTIC_ARC_WIDTH / (2.0 * PI);
+            (grown_radius, 0.0)
+        }
         CapacityStyle::Fixed => {
             if total <= COMFORTABLE_CAPACITY {
                 (BASE_RING_RADIUS, 0.0)
@@ -118,6 +190,7 @@ fn radius_and_wave(style: CapacityStyle, total: usize, angle: f64) -> (f64, f64)
                 // a taller-than-wide silhouette reads as "pointy" without
                 // needing a separate per-stitch lean model. 6-8 reaches
                 // (or nearly reaches) the plateau: a flat circle.
+                let grown_radius = total as f64 * MIN_STITCH_ARC_WIDTH / (2.0 * PI);
                 (grown_radius.min(BASE_RING_RADIUS), 0.0)
             } else {
                 (BASE_RING_RADIUS, overflow_wave(total, angle))
@@ -198,7 +271,7 @@ pub fn place_scheme(
                     sibling_index.insert(*single, index + 1);
 
                     let style = target_capacity_style(scheme, registry, *single)?;
-                    let angle = 2.0 * PI * index as f64 / total as f64;
+                    let angle = sibling_angle(style, index, total);
                     let (radius, z_wave) = radius_and_wave(style, total, angle);
                     // angle = 0 (the first/sole sibling) always lands at
                     // zero lateral offset, matching the pre-§5a behaviour

@@ -20,7 +20,7 @@ use crate::vec3::Vec3;
 
 /// Which stitch(es) a segment belongs to, for reporting *where* a
 /// self-intersection is (GOALS.md M3: "the specific problem location").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SegmentOwner {
     /// Part of this stitch's own base-to-top sub-path.
     Stitch(StitchRef),
