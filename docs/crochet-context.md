@@ -176,10 +176,21 @@ also the correct default insertion target (it usually is, for
 conventional row/round work, but that's a property of *what the designer
 built*, not a rule the engine enforces).
 
-**Foundations** (starting a piece) fit the same model: a foundation chain
-or magic ring is just the first handful of stitch instances in working
-order, with no insertion targets of their own (or, for a magic ring, a
-shared special "ring" target that later gets pulled closed).
+**Foundations** (starting a piece) fit the same model, though the two
+common starts are physically quite different constructions and shouldn't
+be read as the same thing wearing different names: a **foundation chain**
+is a run of several `ch` stitch instances in working order (each with no
+insertion target of its own, §3), while a **magic ring** is *not* made of
+chains at all — it's a single loop formed directly from the working yarn
+(an adjustable/slip loop), with stitches worked around and into that one
+loop before its tail is pulled to close it. In the model this shows up as
+a real structural difference, not just a labelling one: a foundation
+chain is several `ch` instances; a magic ring is exactly **one** `mr`
+instance (§5a) that many stitches then share as a target. The two engine-
+level properties `ch` and `mr` happen to have in common — no insertion
+step, zero height (§3, §5a) — are a coincidence of how the placement
+engine represents "a foundation point," not evidence they're the same
+technique in reality.
 
 **Turning chains are just chains — not a special case (correction, Owner,
 2026-08-24).** A turning chain is structurally identical to any other
@@ -278,11 +289,19 @@ Owner's own calibration, which the engine's constants are tuned against:
   that, it's not that the shape gets stranger — it's that a ring genuinely
   **cannot be tightened around that many strands at all**, a hard physical
   limit, not a gradient.
-- **A magic ring left deliberately open, or a chain/chain-space** (the
-  gap enclosed by a run of chain stitches, e.g. "3dc in the ch-3 space" in
-  a granny square): **very elastic** — comfortably widens to fit more
-  without the same physical ceiling. Granny squares typically use 3;
-  lace and freeform work can call for very different counts, and the
+- **A magic ring left deliberately open** (not tightened): behaves
+  differently from the tightened case above — no cinch point forcing a
+  small radius, so it can simply widen to fit more, the same way the next
+  case can.
+- **A chain or chain-space** (the gap enclosed by a run of chain stitches,
+  e.g. "3dc in the ch-3 space" in a granny square) — a genuinely different
+  construction from a magic ring (a chain is a run of pulled-through
+  loops; a magic ring is one loop of working yarn, §4's foundations note)
+  that happens to land in the same "very elastic" bucket for capacity
+  purposes: comfortably widens to fit more without the same physical
+  ceiling as an ordinary stitch or a tightened ring. Granny squares
+  typically use 3; lace and freeform work can call for very different
+  counts, and the
   engine needs to handle that range, not just the granny-square norm.
 
 **Model implication.** Every stitch, as a *target* for others, has a

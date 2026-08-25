@@ -172,11 +172,15 @@ different counts). Implemented as:
   growing, no plateau, no ripple). One shared capacity threshold (7)
   serves both the ordinary-stitch and tightened-ring cases, since the
   Owner's own numbers for both sit close together.
-- **New `MR` (magic ring) stitch kind.** Structurally like `ch` (no
-  insertion, zero height) but must **not** pick up `ch`'s line-laying-out
-  behaviour — added `StitchDef.lays_out_as_line` (true only for `ch`) so
-  `mr` stays a point anchor. This was a real bug caught by a test
-  assertion mismatch, not something reasoned out in advance.
+- **New `MR` (magic ring) stitch kind.** A magic ring is a single loop of
+  working yarn, not a run of chains (Owner correction, 2026-08-25) — a
+  genuinely different real-world construction from `ch`, even though both
+  happen to share the same *engine-level* properties (no insertion step,
+  zero height) as foundation anchors. Sharing those properties is exactly
+  what caused a real bug, caught by a test assertion mismatch rather than
+  reasoned out in advance: `mr` initially fell into `ch`'s "lay out in a
+  line" placement branch too, when it should stay a single point anchor.
+  Fixed with `StitchDef.lays_out_as_line` (true only for `ch`).
 - **Radial placement** (`geometry.rs`): siblings sharing a target are now
   arranged around a circle (`radius_and_wave`, angle = `2*PI*index/
   total`), not offset linearly along one axis — a straight line has no

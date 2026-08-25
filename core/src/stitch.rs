@@ -21,10 +21,16 @@ pub const TR: StitchId = StitchId("tr");
 pub const DTR: StitchId = StitchId("dtr");
 pub const TRTR: StitchId = StitchId("trtr");
 pub const QUAD_TR: StitchId = StitchId("quad_tr");
-/// Magic ring / adjustable loop (docs §2, §5a): a foundation anchor, not
-/// an inserted stitch — structurally like `ch` (no insertion, zero
-/// height), but registered separately so it can carry its own capacity
-/// behaviour as a *target* (see `CapacityStyle`).
+/// Magic ring / adjustable loop (docs §2, §5a, §4's foundations note): a
+/// single loop of working yarn, not a run of chains — a genuinely
+/// different construction from `ch`, not "ch with a different name." It
+/// shares two *engine-level* properties with `ch` (no insertion step,
+/// zero height, §3) because both are foundation anchors, which is why it
+/// shares `has_insertion: false` below — that's a coincidence of how the
+/// placement engine represents "a foundation point," not a claim about
+/// real-world formation. Registered as its own kind so it can carry its
+/// own capacity behaviour as a *target* (see `CapacityStyle`), which `ch`
+/// does not share.
 pub const MR: StitchId = StitchId("mr");
 
 /// How a stitch behaves as an insertion **target** when several stitches

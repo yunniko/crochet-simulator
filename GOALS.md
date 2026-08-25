@@ -81,6 +81,16 @@ sign-off before M1 starts):
       end-to-end in a browser against the live URL.
 
 **Progress log** (newest first):
+- 2026-08-25 — Owner corrected a documentation inaccuracy: a magic ring
+  is a single loop of working yarn, not formed from chains — a genuinely
+  different real-world construction from `ch`, despite the two sharing
+  engine-level properties (no insertion step, zero height) as foundation
+  anchors. Several passages (`docs/crochet-context.md` §4/§5a,
+  `stitch.rs`, `HANDOVER.md`) worded the resemblance ambiguously enough
+  to risk reading as "magic ring is chain-like" — reworded to state the
+  engine-property overlap is coincidental, not evidence of shared
+  construction. No code/behaviour changes, no test changes; all 44 tests
+  still pass.
 - 2026-08-25 — Owner described viewer/highlighting intent for M4/M5
   (default: loop or leg/post; detailed opt-in: every self-touch point of
   the folded yarn as its own highlightable part) and flagged that "every
