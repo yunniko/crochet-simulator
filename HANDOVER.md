@@ -569,6 +569,21 @@ lint`, `npm run test:unit` (10/10), `npm run build`, `npm run test:e2e`
 (8/8, 5 existing + 3 new, each re-run and stable) all clean, plus the
 from-scratch Docker build and manual browser verification above.
 
+**A second real bug, found only by deploying to the actual live host, not
+by the local Docker build.** `web/public/` exists locally (empty, from
+the original `create-next-app` scaffold) but was never tracked by git —
+git doesn't track empty directories — so the local Docker build (which
+builds from the working tree, not a fresh clone) never surfaced this. A
+genuine fresh `git clone` on the server has no `public/` directory at
+all, and `web/Dockerfile`'s `COPY --from=build /app/public ./public`
+fails outright (`"/app/public": not found`) rather than silently doing
+nothing. Fixed with a tracked `web/public/.gitkeep` placeholder. Worth
+remembering: this project's local Docker verification (M6, above) tests
+"does the Dockerfile work against my working tree," not "does it work
+against exactly what's in git" — the two only diverge on untracked files
+like this one, but when they do, only a real fresh-clone deploy catches
+it.
+
 Not started: the deploy half of M6, and M7 (realistic yarn rendering,
 added 2026-08-25 — see GOALS.md). Goal G-001's milestone plan is in
 `GOALS.md`, approved by the Owner 2026-08-24 (M1-M6) and 2026-08-25 (M7
