@@ -1,79 +1,93 @@
 "use client";
 
-import { useState } from "react";
-
-import {
-  CAPACITY_STYLES,
-  LOOP_TARGETS,
-  STITCH_KINDS,
-  type CapacityStyle,
-  type LoopTarget,
-  type StitchKind,
-  type WireStitch,
-} from "@/lib/wasm";
+import { CAPACITY_STYLES, LOOP_TARGETS, STITCH_KINDS, type CapacityStyle, type LoopTarget, type StitchKind, type WireStitch } from "@/lib/wasm";
+import { isToolAvailable, stitchRequiresTarget, type PlacementState } from "@/lib/tool-placement";
 
 interface SchemeEditorProps {
   stitches: WireStitch[];
-  onAdd: (stitch: WireStitch) => void;
+  placement: PlacementState;
+  onSelectTool: (kind: StitchKind) => void;
   onRemoveLast: () => void;
   onClear: () => void;
+  loopTarget: LoopTarget;
+  onLoopTarget: (value: LoopTarget) => void;
+  capacityOverride: CapacityStyle | "";
+  onCapacityOverride: (value: CapacityStyle | "") => void;
 }
 
-export default function SchemeEditor({ stitches, onAdd, onRemoveLast, onClear }: SchemeEditorProps) {
-  const [kind, setKind] = useState<StitchKind>("dc");
-  const [targets, setTargets] = useState<Set<number>>(new Set());
-  const [loopTarget, setLoopTarget] = useState<LoopTarget>("Both");
-  const [capacityOverride, setCapacityOverride] = useState<CapacityStyle | "">("");
-
-  const toggleTarget = (index: number) => {
-    setTargets((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
-      return next;
-    });
-  };
-
-  const handleAdd = () => {
-    onAdd({
-      kind,
-      targets: [...targets].sort((a, b) => a - b),
-      ...(loopTarget !== "Both" ? { loop_target: loopTarget } : {}),
-      ...(capacityOverride ? { capacity_override: capacityOverride } : {}),
-    });
-    // Next stitch commonly targets whatever was just added — carry that
-    // forward instead of resetting to nothing, but let loop/capacity
-    // settings reset since those are less often reused stitch-to-stitch.
-    setTargets(new Set([stitches.length]));
-    setLoopTarget("Both");
-    setCapacityOverride("");
-  };
+export default function SchemeEditor({
+  stitches,
+  placement,
+  onSelectTool,
+  onRemoveLast,
+  onClear,
+  loopTarget,
+  onLoopTarget,
+  capacityOverride,
+  onCapacityOverride,
+}: SchemeEditorProps) {
+  const { activeTool, pendingTargets } = placement;
+  const activeNeedsTarget = activeTool !== null && stitchRequiresTarget(activeTool);
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 text-sm">
       <section>
-        <h2 className="mb-2 font-medium text-zinc-300">Add stitch</h2>
-        <div className="flex flex-col gap-2">
-          <label className="flex items-center justify-between gap-2">
-            <span className="text-zinc-400">Kind</span>
-            <select
-              value={kind}
-              onChange={(e) => setKind(e.target.value as StitchKind)}
-              className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-zinc-200"
-            >
-              {STITCH_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-          </label>
+        <h2 className="mb-1 font-medium text-zinc-300">Stitch tool</h2>
+        <p className="mb-2 text-xs text-zinc-500">
+          {stitches.length === 0
+            ? "Pick chain or magic ring, then click the yarn to start."
+            : activeNeedsTarget
+              ? "Click the stitch(es) to insert into on the render, then click this tool again to place it."
+              : "Pick a tool, then click the render to place it."}
+        </p>
+        <div className="grid grid-cols-3 gap-1.5" data-testid="tool-palette">
+          {STITCH_KINDS.map((kind) => {
+            const available = isToolAvailable(kind, stitches.length);
+            const isActive = activeTool === kind;
+            return (
+              <button
+                key={kind}
+                data-testid={`tool-${kind}`}
+                disabled={!available}
+                aria-pressed={isActive}
+                onClick={() => onSelectTool(kind)}
+                title={
+                  kind === "mr"
+                    ? "Magic ring — only available as the very first stitch"
+                    : kind === "ch"
+                      ? "Chain — never needs a target"
+                      : `${kind} — needs at least one existing stitch as a target`
+                }
+                className={`rounded px-2 py-2 text-xs font-medium uppercase transition-colors ${
+                  isActive
+                    ? "bg-sky-600 text-white"
+                    : available
+                      ? "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      : "cursor-not-allowed bg-zinc-800/40 text-zinc-600"
+                }`}
+              >
+                {kind}
+              </button>
+            );
+          })}
+        </div>
+        {activeNeedsTarget && (
+          <div data-testid="pending-targets" className="mt-2 text-xs text-sky-400">
+            {pendingTargets.length === 0
+              ? "No targets selected yet."
+              : `Targets: [${pendingTargets.join(", ")}] — click "${activeTool}" again to place.`}
+          </div>
+        )}
+      </section>
 
+      <section>
+        <h2 className="mb-2 font-medium text-zinc-300">Modifiers for the next stitch</h2>
+        <div className="flex flex-col gap-2">
           <label className="flex items-center justify-between gap-2">
             <span className="text-zinc-400">Loop target</span>
             <select
               value={loopTarget}
-              onChange={(e) => setLoopTarget(e.target.value as LoopTarget)}
+              onChange={(e) => onLoopTarget(e.target.value as LoopTarget)}
               className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-zinc-200"
             >
               {LOOP_TARGETS.map((lt) => (
@@ -90,7 +104,7 @@ export default function SchemeEditor({ stitches, onAdd, onRemoveLast, onClear }:
             </span>
             <select
               value={capacityOverride}
-              onChange={(e) => setCapacityOverride(e.target.value as CapacityStyle | "")}
+              onChange={(e) => onCapacityOverride(e.target.value as CapacityStyle | "")}
               className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-zinc-200"
             >
               <option value="">(default)</option>
@@ -101,35 +115,6 @@ export default function SchemeEditor({ stitches, onAdd, onRemoveLast, onClear }:
               ))}
             </select>
           </label>
-
-          <div>
-            <div className="mb-1 text-zinc-400">
-              Targets ({targets.size} selected)
-            </div>
-            <div className="max-h-40 overflow-y-auto rounded border border-zinc-700 bg-zinc-800/50 p-1">
-              {stitches.length === 0 && (
-                <div className="px-2 py-1 text-zinc-500">No stitches yet — this one will be the foundation.</div>
-              )}
-              {stitches.map((s, i) => (
-                <label
-                  key={i}
-                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-zinc-700/50"
-                >
-                  <input type="checkbox" checked={targets.has(i)} onChange={() => toggleTarget(i)} />
-                  <span className="text-zinc-300">
-                    [{i}] {s.kind}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <button
-            onClick={handleAdd}
-            className="mt-1 rounded bg-emerald-700 px-3 py-1.5 font-medium text-white hover:bg-emerald-600"
-          >
-            Add stitch [{stitches.length}]
-          </button>
         </div>
       </section>
 

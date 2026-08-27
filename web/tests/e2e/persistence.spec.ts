@@ -1,20 +1,23 @@
 import { expect, test } from "@playwright/test";
 
+import { placeChains } from "./helpers";
+
 // M6: save/load. Hits the real dev Postgres (docker compose's `db`
 // service, see ../../README.md) through the actual server actions — not
 // mocked — since the whole point is proving the browser -> server action
 // -> Prisma -> Postgres round trip works, matching the Company standard
 // of verifying by running, not just asserting in isolation.
+//
+// Builds its scheme via the M8 tool-palette + render-click flow
+// (placeChains — chains only, since the click position doesn't matter
+// for `ch` — see helpers.ts), not the old form; the app already starts
+// empty by default (M8), so there's no need to Clear first.
 
 test("saving a scheme updates the URL and share link, and reloading it round-trips the scheme", async ({
   page,
 }) => {
   await page.goto("/");
-
-  // Start from a small, deterministic scheme rather than a preset, so the
-  // round-trip assertion below isn't just re-checking a preset's own data.
-  await page.getByRole("button", { name: "Clear" }).click();
-  await page.getByRole("button", { name: /Add stitch/ }).click(); // [0] dc, no targets
+  await placeChains(page, 1);
 
   await page.getByTestId("scheme-name-input").fill("e2e persistence test");
   await page.getByTestId("save-button").click();
@@ -41,13 +44,12 @@ test("saving a scheme updates the URL and share link, and reloading it round-tri
 
 test("saving again on an already-saved scheme overwrites it in place, not a new link", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Clear" }).click();
-  await page.getByRole("button", { name: /Add stitch/ }).click();
+  await placeChains(page, 1);
   await page.getByTestId("save-button").click();
   await expect(page).toHaveURL(/\/s\/[a-z0-9]{12}$/);
   const firstUrl = page.url();
 
-  await page.getByRole("button", { name: /Add stitch/ }).click(); // now 2 stitches
+  await placeChains(page, 1); // now 2 stitches
   // Unlike the first save, neither the URL nor the client-side stitch
   // count changes as a *result* of this second save completing (the URL
   // was already firstUrl, and stat-stitches already reflects the local

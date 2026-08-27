@@ -711,11 +711,180 @@ canvas pixels, by design, see `web/AGENTS.md`) all clean from a fully
 clean `.next`/Turbopack cache. `cargo test`/`clippy`/`fmt` unaffected, as
 expected for a rendering-only milestone.
 
-Not started: nothing — M7 was the last milestone in G-001's plan besides
-whatever the Owner adds next. See GOALS.md for the full milestone list
-and what's still open (persistence/deploy's standing git-email config
-note, the cross-target local-density and decrease/multi-target-stitch
-geometric limitations, the chain-shape limitation just above).
+**M8 done (2026-08-28): direct-manipulation editor.** Owner gave a
+detailed spec, mid-session, for a completely different primary
+interaction model — not signing off on M1-M7, but redirecting: replace
+the dropdown/checkbox "Add stitch" form with a tool palette (one button
+per stitch kind) where the active tool determines what clicking the 3D
+render does. Also said explicitly, mid-spec: implement it as "thoughtful
+inner application changes... instead of patches healing only [a]
+singular part of [the] problem" — treated as a standing instruction
+(saved to memory), not just guidance for this one milestone: redesign the
+whole affected system coherently rather than bolt a click handler onto
+the existing structure. This shaped the scope below — the M7 rendering
+grouping, the app's default state, and the whole `SchemeEditor`/
+`EditorApp` component boundary all changed, not just "add an onClick."
+
+**One real design gap in the Owner's spec, resolved before building:**
+decreases (a stitch sharing multiple targets) weren't addressed — asked
+via `AskUserQuestion`, Owner chose "click each target in turn, click the
+active tool again to confirm" over deferring decreases entirely. Two
+other calls made without asking (lower-stakes, stated here rather than
+interrupting for them): loop-target/capacity-override stayed as secondary
+modifier toggles rather than being dropped (real, tested M5 capability);
+the old form was fully replaced, not kept alongside the new flow.
+
+**`lib/tool-placement.ts` (new, pure, 21 Vitest tests) — the whole
+interaction model as a state machine**, deliberately factored out of any
+React/three.js code so the actual rules live in one tested place:
+- `isToolAvailable(kind, stitchCount)`: `mr` only with zero stitches
+  placed (docs §5a: a magic ring is a foundation anchor only); every
+  target-requiring kind only once at least one stitch exists; `ch`
+  always (`docs/crochet-context.md` §3/§4: it never has a target).
+- `selectTool`/`clickStitch`/`clickEmptySpace`: the three events the
+  whole model reduces to. Clicking a stitch with a target-requiring tool
+  active toggles it into/out of a pending-target set (not just adds —
+  mis-clicks need to be undoable); clicking the *same already-active*
+  tool button again either confirms a placement (pending targets
+  non-empty) or deselects the tool (pending empty) — a single-target
+  placement is exactly this flow with one target click before
+  confirming, so no separate code path was needed for the "common case."
+  `ch`/`mr` ignore *what* was clicked (they never have a target either
+  way) — any click, on existing geometry or empty space, places one.
+
+**`components/YarnViewer.tsx` restructured for per-stitch clickability.**
+M7's `buildYarnStrands` merged consecutive same-flagged-status segments
+into one continuous tube mesh purely for visual smoothness — fine when
+nothing needed to distinguish *which* stitch a click landed on. M8 needs
+exactly that, so strands are no longer merged across stitch boundaries at
+all; each stitch (and each bridge) is its own mesh, tagged with
+`stitchIndex: number | null` (`null` for a bridge — connective tissue
+between two stitches, never itself a click target). Endpoints still
+coincide exactly across strands (the wiggle tapers to zero at both ends,
+per M7), so the un-merged tubes still read as one continuous piece of
+yarn visually — the merge was a rendering nicety, not something the
+visual result depended on. Added: a plain starting-yarn-stub mesh shown
+whenever `stitches.length === 0` (nothing to compute yet, so no wasm
+round trip for it), a `PENDING_COLOR` highlight for stitches in the
+current pending-target set, and `Canvas`'s `onPointerMissed` wired to the
+empty-space-click event. `ComputePane` (`EditorApp.tsx`) now mounts
+`YarnViewer` unconditionally instead of swapping it for placeholder text
+below `stitches.length > 0` — the render *is* how building a scheme
+starts now, not just how an already-built one is displayed, so it can't
+disappear during the empty state.
+
+**The app's default state is now empty**, not the flat-circle preset —
+matches the Owner's "the app is starting with a straight end piece of
+yarn rendered" literally. Presets remain available as alternate starting
+points via the header buttons, unchanged in shape; they just aren't the
+*default* anymore.
+
+**A real bug, inherited from M7, found only because M8 made an
+all-chain scheme an actual exercised path.** `ch` has no wiggle template
+(`STITCH_WRAP_COUNTS.ch === 0`) but *does* have real positional extent —
+`geometry.rs`'s `lays_out_as_line` gives every chain a genuine
+`CHAIN_STEP_X`-long base-to-top span, unlike `ss`/`mr` where base and top
+truly coincide. `buildStitchCurvePoints` conflated the two ("no wiggle"
+with "zero extent"), collapsing every chain to an invisible single point
+whenever `wraps <= 0` regardless of its real span. M7's own manual
+verification never caught this because every scheme it happened to check
+had a postable stitch nearby providing enough visible geometry to make
+the collapsed chains an unnoticed gap; M8's very first real test (three
+chains, nothing else, built from scratch by clicking) rendered
+completely blank. Diagnosed the same way as the M7 blank-canvas incident
+— temporary logging to confirm the *data* was fine before suspecting the
+*code* — except this time the data logging is what revealed the actual
+bug (zero-length point arrays), not a stale cache. Fixed: only collapse
+to a point when `height < 1e-9` (base and top genuinely coincide);
+`wraps <= 0` alone now returns the real `[base, top]` span. Two new
+regression tests lock this in (`ch` with real extent keeps its span; `ch`
+with base===base still collapses correctly in the genuine degenerate
+case).
+
+**A second, narrower rendering limitation found and *not* fixed, logged
+honestly rather than papered over:** when a target-requiring stitch
+targets something other than its immediate working-order predecessor (a
+spike-stitch-like case), the connecting bridge segment can retrace
+*exactly* back over a stitch's own already-rendered path — e.g. `ch,
+ch, dc -> [0]`: the bridge from stitch 1 (working-order predecessor) to
+the `dc` (which targets stitch 0, not stitch 1) runs the literal reverse
+of stitch 1's own span. Both tubes are geometrically correct and
+independently coloured correctly, but they perfectly z-fight/overlap, so
+a pending-target highlight on the underlying stitch can be visually
+masked by the ordinary-coloured bridge drawn over the same space. Traced
+with the same base/top-point logging used for the M7/M8 chain bug, this
+time confirming the *rendered data* was correct on both sides — a real,
+if narrow, visual-only edge case (only occurs for spike-stitch-like
+divergence between working order and targeting), not a functional bug:
+the click still correctly registers and the stitch list is always
+correct regardless of what's visually distinguishable in a crowded spot.
+
+**Also fixed while building this: a stale-stats display bug.** Clearing
+a loaded scheme left the *previous* scheme's stats panel on screen,
+including a `Flagged (N intersections)` reading for a now-empty scheme
+that has nothing to be flagged — `ComputePane`'s effect deliberately
+never resets `result` during a recompute (avoids flicker while editing a
+non-empty scheme, unchanged since M5/M6), but that reasoning doesn't
+apply once the scheme itself is gone. Fixed by gating the stats panel's
+render on `stitches.length > 0 && result`, not `result` alone — no state
+reset needed, so it doesn't reopen the `react-hooks/set-state-in-effect`
+issue M4/M5 already hit and worked around.
+
+**Two real e2e-test-only bugs, found by actually running the suite
+repeatedly, not by reading it — same discipline as M6's "saving twice"
+race:**
+1. A helper (`placeChains`) re-clicked the `ch` tool button on every
+   call, even when it was already the active tool — which, per the
+   state machine above, *deselects* an already-active tool with nothing
+   pending, not a no-op. Broke any test placing chains across more than
+   one call. Fixed: only click the tool button if it isn't already
+   `aria-pressed`.
+2. A canvas click fired immediately after `page.goto` can land on a
+   `<canvas>` that Playwright considers "visible and stable" but that
+   react-three-fiber hasn't actually finished wiring raycasting up to
+   yet — intermittently (not every run) silently did nothing. An initial
+   fix (poll `canvas.toDataURL()` for a length threshold) still flaked
+   under repeated runs, since even a freshly-cleared canvas serializes to
+   more bytes than a casually-chosen threshold accounts for — a heuristic
+   that merely made the race *narrower*, not gone. Replaced with a real
+   signal: `YarnViewer`'s `Canvas` sets `data-r3f-ready="true"` on its own
+   DOM element from `onCreated`, which only fires once r3f's
+   renderer/event setup has genuinely finished; tests wait on that
+   attribute instead of guessing. Stable across 60 repeated runs (6× the
+   full 10-test suite) after the fix, where the `toDataURL` heuristic had
+   still failed roughly 1 run in 15.
+3. Clicking a *specific* rendered stitch (not just "anywhere on the
+   yarn," which `ch`/`mr` tolerate) needs a screen point that actually
+   lands on that stitch's mesh — hand-deriving the exact camera
+   projection for a known 3D point was judged not worth the real-math
+   risk (a subtly wrong constant would silently mis-click and be hard to
+   notice). Used a small grid-search helper (`clickUntil`) instead: try
+   points across the canvas until a caller-supplied condition is met.
+   Pragmatic, not elegant — documented as such in the helper itself.
+
+**Verified for real**, manually in a browser, the entire flow end to
+end before writing a single e2e test for it: empty start → `ch`/`mr`
+palette-only → first stitch via clicking the stub → `mr` disabling
+itself the moment a stitch exists → `ch` placing via both a render-hit
+and a genuine empty-space miss → `dc` accumulating two pending targets
+(highlighted) → confirming a real decrease (`dc -> [0, 1]`) → `Remove
+last`/`Clear` correctly dropping stale pending-target state. Then wrote
+the e2e coverage to match what had already been confirmed working by
+hand, not the other way around.
+
+`cargo test`/`clippy`/`fmt` unaffected (no core/wasm changes this
+milestone either). `npm run lint`, `npm run test:unit` (41/41, was 17 —
+21 new `tool-placement.spec.ts` tests plus a handful of `yarn-shape.ts`
+regression additions), `npm run build`, `npm run test:e2e` (10/10, was
+8 — rewritten for the new interaction model, stable across 60 repeats)
+all clean.
+
+Not started: nothing currently planned — M8 was added mid-session on top
+of the original 7-milestone plan; whatever's next is the Owner's call.
+See GOALS.md for the full milestone list and what's still open
+(persistence/deploy's standing git-email config note, the cross-target
+local-density and decrease/multi-target-stitch geometric limitations, the
+chain-visual-shape and bridge-overlap-highlighting limitations above).
 
 ## Decision record
 

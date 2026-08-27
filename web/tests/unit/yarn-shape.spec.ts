@@ -25,12 +25,28 @@ describe("buildStitchCurvePoints", () => {
     }
   });
 
-  it("returns just the base point for zero-height kinds (ch, ss, mr)", () => {
+  it("returns just the base point when base and top genuinely coincide (ss, mr)", () => {
     const base = { x: 0, y: 0, z: 0 };
     const top = { x: 0, y: 0, z: 0 }; // matches the physics model: these are point anchors
-    for (const kind of ["ch", "ss", "mr"] as StitchKind[]) {
+    for (const kind of ["ss", "mr"] as StitchKind[]) {
       expect(buildStitchCurvePoints(base, top, kind)).toEqual([base]);
     }
+  });
+
+  it("ch has no wiggle but keeps its real positional span, not collapsed to a point", () => {
+    // Mirrors geometry.rs's `lays_out_as_line`: a chain's base and top are
+    // never the same point (a real CHAIN_STEP_X-long span), even though
+    // it has no wiggle template (STITCH_WRAP_COUNTS.ch === 0). Regression
+    // test for a real bug: an earlier version returned just [base] here,
+    // silently rendering every all-chain run as invisible single points.
+    const base = { x: 0, y: 0, z: 0 };
+    const top = { x: 1, y: 0, z: 0 };
+    expect(buildStitchCurvePoints(base, top, "ch")).toEqual([base, top]);
+  });
+
+  it("still collapses ch to a single point in the degenerate case where base and top do coincide", () => {
+    const base = { x: 2, y: 3, z: 4 };
+    expect(buildStitchCurvePoints(base, base, "ch")).toEqual([base]);
   });
 
   it("handles a base/top pair that isn't axis-aligned without producing NaNs", () => {
@@ -61,7 +77,7 @@ describe("buildYarnStrands", () => {
     { kind: "dc", targets: [0] },
   ];
 
-  it("produces a single continuous strand for an ordinary, unflagged scheme", () => {
+  it("produces one strand per stitch and one per bridge, each tagged for click targeting", () => {
     const segments = [
       seg("stitch[0]", [0, 0, 0], [0, 0, 0]),
       seg("bridge[0->1]", [0, 0, 0], [0.5, 0, 0]),
@@ -69,14 +85,19 @@ describe("buildYarnStrands", () => {
       seg("stitch[1]", [0.5, 0, 0.5], [0.5, 0, 1]),
     ];
     const strands = buildYarnStrands(segments, stitches);
-    expect(strands).toHaveLength(1);
-    expect(strands[0].flagged).toBe(false);
-    // Continuous: every point flows into the next with no duplicate seam
-    // beyond the merge itself.
-    expect(strands[0].points.length).toBeGreaterThan(1);
+    // stitch[0] (mr), bridge[0->1], stitch[1] (dc) — three separate
+    // strands, deliberately not merged across stitch boundaries (M8:
+    // clicking a mesh has to resolve to a specific stitch index).
+    expect(strands).toHaveLength(3);
+    expect(strands.map((s) => s.stitchIndex)).toEqual([0, null, 1]);
+    expect(strands.every((s) => !s.flagged)).toBe(true);
+    // Endpoints still coincide across strands, so the un-merged tubes
+    // still read as one continuous piece of yarn visually.
+    expect(strands[0].points[strands[0].points.length - 1]).toEqual(strands[1].points[0]);
+    expect(strands[1].points[strands[1].points.length - 1]).toEqual(strands[2].points[0]);
   });
 
-  it("splits into separate strands exactly where the flagged status changes", () => {
+  it("tags each strand's own flagged status independently, not merged with neighbours", () => {
     const segments = [
       seg("stitch[0]", [0, 0, 0], [0, 0, 0], false),
       seg("bridge[0->1]", [0, 0, 0], [0.5, 0, 0], true),
@@ -84,6 +105,18 @@ describe("buildYarnStrands", () => {
     ];
     const strands = buildYarnStrands(segments, stitches);
     expect(strands.map((s) => s.flagged)).toEqual([false, true, false]);
+  });
+
+  it("never assigns a stitch index to a bridge strand", () => {
+    const segments = [
+      seg("stitch[0]", [0, 0, 0], [0, 0, 0]),
+      seg("bridge[0->1]", [0, 0, 0], [0.5, 0, 0]),
+      seg("stitch[1]", [0.5, 0, 0], [0.5, 0, 1]),
+    ];
+    const strands = buildYarnStrands(segments, stitches);
+    const bridge = strands.find((s) => s.stitchIndex === null);
+    expect(bridge).toBeDefined();
+    expect(bridge!.points).toEqual([{ x: 0, y: 0, z: 0 }, { x: 0.5, y: 0, z: 0 }]);
   });
 
   it("uses the stitch's own kind to build its curve, not a generic default", () => {
@@ -98,9 +131,11 @@ describe("buildYarnStrands", () => {
     ];
     const dcStrands = buildYarnStrands(segments, stitches.map((s, i) => (i === 1 ? { ...s, kind: "dc" as const } : s)));
     const quadTrStrands = buildYarnStrands(segments, tallStitches);
+    const dcStitchStrand = dcStrands.find((s) => s.stitchIndex === 1)!;
+    const quadTrStitchStrand = quadTrStrands.find((s) => s.stitchIndex === 1)!;
     // A quad_tr's wiggle has far more sample points than a dc's over the
     // same base/top span (see STITCH_WRAP_COUNTS) — confirms the kind
     // actually drove which template got used, not a shared default.
-    expect(quadTrStrands[0].points.length).toBeGreaterThan(dcStrands[0].points.length);
+    expect(quadTrStitchStrand.points.length).toBeGreaterThan(dcStitchStrand.points.length);
   });
 });

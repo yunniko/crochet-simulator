@@ -1,9 +1,8 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**All 7 planned milestones (M1-M7) done as of 2026-08-28 — pending Owner
-review/sign-off against the acceptance criteria below before moving to
-Completed.**
+**M1-M8 done as of 2026-08-28 — pending Owner review/sign-off against the
+acceptance criteria below before moving to Completed.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -90,8 +89,71 @@ sign-off before M1 starts):
       Rendering-layer only — must not require changing core/wasm's
       relaxation or validation geometry, which stay the physics
       abstraction they already are underneath the visual overlay.
+- [x] M8 — Direct-manipulation editor: replace the dropdown/checkbox
+      "Add stitch" form with a tool-based, click-on-the-render workflow.
+      A row of stitch-kind buttons acts as a tool palette; the active
+      tool determines what a click on the 3D view does. Starts with a
+      short, undecorated straight piece of yarn rendered (no scheme
+      computed yet) — clicking it (or empty space) with `ch` or `mr`
+      active places the foundation stitch. Availability rules: `mr` only
+      enabled with zero stitches placed (foundation-only); every other
+      kind only enabled once at least one stitch exists (they all need a
+      target); `ch` always enabled, placeable by clicking empty space
+      (never needs a target). Target-requiring kinds are placed by
+      clicking the target stitch directly on the render; decreases
+      (multiple targets) are supported by clicking each target in turn
+      (highlighted as a pending selection) and clicking the active tool
+      button again to confirm and place the stitch — a single-target
+      placement is just that flow with one click before confirming.
+      Loop-target/capacity-override stay available as secondary modifier
+      toggles for the next placement (real, tested capability from M5 —
+      not to be dropped). Requires restructuring the render's stitch
+      grouping so individual stitches are distinguishable click targets
+      (M7's flagged-status-based strand merging isn't enough on its own).
+      Existing presets keep working as scheme-loading shortcuts alongside
+      the new build-from-scratch flow. Acceptance: Owner can build a
+      scheme (including at least one decrease) entirely by selecting
+      tools and clicking the render, with no form fields involved.
 
 **Progress log** (newest first):
+- 2026-08-28 — **M8 done — direct-manipulation editor.** Owner gave
+  detailed new direction instead of signing off on M1-M7: replace the
+  dropdown/checkbox form with a tool palette (one button per stitch
+  kind) — the active tool determines what clicking the 3D render does.
+  Also said explicitly to implement changes as full redesigns of the
+  affected system, not narrow patches — saved to memory as standing
+  guidance, and shaped this milestone's scope (the M7 rendering-merge
+  strategy, the app's default state, and the editor's component
+  boundary all changed, not just "add an onClick"). One real gap in the
+  spec (decreases) resolved via `AskUserQuestion`: click each target in
+  turn, click the active tool again to confirm — a single-target
+  placement is the same flow with one click before confirming.
+  New `lib/tool-placement.ts` (pure state machine, 21 Vitest tests) is
+  the whole interaction model, framework-free. `YarnViewer.tsx`
+  restructured so each stitch is its own clickable mesh (M7 had merged
+  same-flagged-status runs together, fine for display but incompatible
+  with "which stitch did I click"). App now starts empty (a plain
+  starting-yarn stub) rather than defaulting to a preset, matching the
+  Owner's "app starting with a straight end piece of yarn" literally.
+  Found and fixed a real bug inherited from M7: `ch` has no wiggle
+  template but *does* have real positional extent (`geometry.rs`'s
+  `lays_out_as_line`), and an earlier version of the render code
+  conflated "no wiggle" with "zero extent," silently collapsing every
+  all-chain scheme to invisible points — M8's empty-start flow was the
+  first thing to actually exercise that path. Also found (and left as a
+  documented, narrow visual-only limitation, not fixed): a bridge segment
+  can retrace exactly over a stitch's own path in spike-stitch-like
+  schemes, visually masking a pending-target highlight even though the
+  underlying click/data is correct. Fixed a stale-stats display bug
+  (Clear left the previous scheme's "Flagged" reading on screen) and two
+  e2e-test-only bugs (a tool-reselection helper bug, and canvas-click
+  timing — fixed with a real `data-r3f-ready` signal from r3f's
+  `onCreated`, not a guessed heuristic; stable across 60 repeated runs
+  after the fix). Manually verified the entire flow in a real browser
+  before writing any e2e coverage for it. `npm run test:unit` (41/41,
+  was 17), `npm run lint`, `npm run build`, `npm run test:e2e` (10/10,
+  was 8, rewritten for the new model) all clean; `cargo test`/clippy/fmt
+  unaffected. Full account in `HANDOVER.md`.
 - 2026-08-28 — **M7 done — realistic yarn rendering.** New
   `web/lib/yarn-shape.ts` (pure, Vitest-tested): real cylindrical
   thickness along a smooth Catmull-Rom curve (radius mirrors

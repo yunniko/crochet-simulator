@@ -14,7 +14,7 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-All 7 planned milestones (M1–M7) done. **Live at
+All 8 planned milestones (M1–M8) done. **Live at
 https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
@@ -25,17 +25,22 @@ spring relaxation solve (stitch topology, not a separate material
 property, determines stretchiness), and self-intersection / stitch-count
 validation on the relaxed shape. `wasm/` bridges it to the browser via
 `wasm-bindgen`, exposing one general `compute_scheme` call for whatever
-graph the UI builds. `web/` is a real scheme editor: add stitches, choose
-insertion targets/loop targets/capacity overrides, watch the yarn render
-live as real, thick, per-stitch-shaped 3D tubes (not flat lines — see
-`HANDOVER.md`'s M7 entry) with validation updating alongside it, and save
-a scheme to get an unguessable link back to reload/share it by — no
-accounts, see `HANDOVER.md`'s M6 access-model decision. See `GOALS.md` →
-G-001 for the milestone plan and progress log, and known/deferred
-limitations (a dense round's several increases can still collide with a
-*neighbouring* increase — flagged, not yet fixed; decrease/multi-target
-stitches get no capacity/ring geometric treatment; chains don't yet
-visually read as linked ovals in the renderer).
+graph the UI builds. `web/` is a direct-manipulation editor: the app
+starts with a plain starting piece of yarn; pick a stitch-kind tool from
+the palette and click the render to place it (empty space works for
+chains; a target-requiring stitch is placed by clicking its target(s)
+directly, confirming a multi-target decrease by clicking the tool again —
+see `HANDOVER.md`'s M8 entry). The yarn renders live as real, thick,
+per-stitch-shaped 3D tubes (not flat lines — see `HANDOVER.md`'s M7
+entry) with validation updating alongside it, and saving gives back an
+unguessable link to reload/share the scheme by — no accounts, see
+`HANDOVER.md`'s M6 access-model decision. See `GOALS.md` → G-001 for the
+milestone plan and progress log, and known/deferred limitations (a dense
+round's several increases can still collide with a *neighbouring*
+increase — flagged, not yet fixed; decrease/multi-target stitches get no
+capacity/ring geometric treatment; chains don't yet visually read as
+linked ovals in the renderer; a pending-target highlight can be visually
+masked when a bridge segment happens to retrace a stitch's own path).
 
 ## Run locally
 
@@ -79,7 +84,8 @@ already rebuilt/committed — see above):
 docker compose --profile app up -d --build   # db + migrate + app, http://127.0.0.1:30020
 ```
 
-Build a scheme from scratch, or start from one of four presets (flat
-circle, overloaded ring, shell, freeform spike); Save gives back an
-unguessable `/s/<slug>` link that reloads (or re-saves over) that exact
-scheme — no accounts, see `HANDOVER.md`'s M6 access-model decision.
+Pick a tool and click the render to build a scheme from scratch, or start
+from one of four presets (flat circle, overloaded ring, shell, freeform
+spike); Save gives back an unguessable `/s/<slug>` link that reloads (or
+re-saves over) that exact scheme — no accounts, see `HANDOVER.md`'s M6
+access-model decision.

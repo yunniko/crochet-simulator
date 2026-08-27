@@ -79,13 +79,27 @@ function normalize(a: Vec3): Vec3 {
  * zero at both ends (`Math.sin(Math.PI * t)`), so `points[0] === base` and
  * the last point `=== top` precisely — it always joins its neighbouring
  * bridge/stitch without a seam.
+ *
+ * `height < 1e-9` (base and top genuinely coincide — true of `ss`/`mr`,
+ * see `core/src/geometry.rs`) is the only case that collapses to a single
+ * point. `ch` has *no wiggle* (`STITCH_WRAP_COUNTS.ch === 0`) but still
+ * has real positional extent — `geometry.rs`'s `lays_out_as_line` gives
+ * every chain a real `CHAIN_STEP_X`-long base-to-top span — so `wraps <=
+ * 0` on its own must still return the real `[base, top]` span, not
+ * collapse it. Conflating the two (an earlier version of this function
+ * did) silently rendered every all-chain run of stitches as invisible
+ * single points — found only once M8's editor made building a
+ * chains-only scheme from scratch an actual, exercised path.
  */
 export function buildStitchCurvePoints(base: Vec3, top: Vec3, kind: StitchKind, yarnRadius = YARN_RADIUS): Vec3[] {
   const wraps = STITCH_WRAP_COUNTS[kind];
   const direction = sub(top, base);
   const height = length(direction);
-  if (wraps <= 0 || height < 1e-9) {
+  if (height < 1e-9) {
     return [base];
+  }
+  if (wraps <= 0) {
+    return [base, top];
   }
 
   const forward = scale(direction, 1 / height);
@@ -114,29 +128,33 @@ export function buildStitchCurvePoints(base: Vec3, top: Vec3, kind: StitchKind, 
   return points;
 }
 
-interface Strand {
+// A strand tagged with which stitch (if any) it's the shape of — M8 needs
+// this: clicking a rendered mesh has to resolve back to a specific stitch
+// index so it can become a target, which a merged-across-stitch-boundaries
+// mesh (M7's original approach) can't support. `stitchIndex` is `null` for
+// a bridge — the connecting strand between two stitches, not owned by
+// either one, and never a valid click target itself.
+export interface Strand {
   points: Vec3[];
   flagged: boolean;
+  stitchIndex: number | null;
 }
 
 const STITCH_LABEL = /^stitch\[(\d+)\]$/;
 const BRIDGE_LABEL = /^bridge\[\d+->\d+\]$/;
 
 /**
- * Turns the WASM bridge's flat segment list into smooth, coloured tube
- * strands: each `stitch[i]` run of sub-segments is replaced by that
- * stitch's own wiggle curve (via `buildStitchCurvePoints`), `bridge[...]`
- * runs stay a plain 2-point span, and consecutive runs sharing the same
- * `flagged` status are merged into one continuous strand (dropping the
- * duplicate shared point) so the tube stays visually unbroken except
- * exactly where the flagged/ordinary colour actually changes.
+ * Turns the WASM bridge's flat segment list into one strand per stitch
+ * (its own wiggle curve, via `buildStitchCurvePoints`) plus one strand per
+ * connecting bridge (a plain 2-point span) — deliberately *not* merged
+ * across stitch boundaries the way M7's first version did, since each
+ * stitch needs to stay its own clickable mesh (see `Strand.stitchIndex`).
+ * Every strand's endpoints still coincide exactly with its neighbours'
+ * (the wiggle tapers to zero at both ends), so the un-merged tubes still
+ * read as one continuous piece of yarn visually.
  */
 export function buildYarnStrands(segments: WasmSegment[], stitches: WireStitch[]): Strand[] {
-  interface RawGroup {
-    points: Vec3[];
-    flagged: boolean;
-  }
-  const rawGroups: RawGroup[] = [];
+  const strands: Strand[] = [];
 
   let i = 0;
   while (i < segments.length) {
@@ -152,9 +170,10 @@ export function buildYarnStrands(segments: WasmSegment[], stitches: WireStitch[]
 
     const stitchMatch = STITCH_LABEL.exec(label);
     let points: Vec3[];
+    let stitchIndex: number | null = null;
     if (stitchMatch) {
-      const index = Number(stitchMatch[1]);
-      const kind = stitches[index]?.kind;
+      stitchIndex = Number(stitchMatch[1]);
+      const kind = stitches[stitchIndex]?.kind;
       points = kind ? buildStitchCurvePoints(first.start, last.end, kind) : [first.start, last.end];
     } else if (BRIDGE_LABEL.test(label)) {
       points = [first.start, last.end];
@@ -163,18 +182,9 @@ export function buildYarnStrands(segments: WasmSegment[], stitches: WireStitch[]
       // dropping it silently.
       points = [first.start, last.end];
     }
-    rawGroups.push({ points, flagged });
+    strands.push({ points, flagged, stitchIndex });
     i = j;
   }
 
-  const strands: Strand[] = [];
-  for (const group of rawGroups) {
-    const lastStrand = strands[strands.length - 1];
-    if (lastStrand && lastStrand.flagged === group.flagged) {
-      lastStrand.points.push(...group.points.slice(1));
-    } else {
-      strands.push({ points: [...group.points], flagged: group.flagged });
-    }
-  }
   return strands;
 }

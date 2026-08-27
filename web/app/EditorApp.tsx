@@ -6,7 +6,17 @@ import { useEffect, useState } from "react";
 import { saveScheme } from "@/app/actions";
 import SchemeEditor from "@/components/SchemeEditor";
 import { PRESETS } from "@/lib/presets";
-import type { WireStitch } from "@/lib/stitch-kinds";
+import type { CapacityStyle, LoopTarget, StitchKind, WireStitch } from "@/lib/stitch-kinds";
+import {
+  clickEmptySpace,
+  clickStitch,
+  INITIAL_PLACEMENT_STATE,
+  isToolAvailable,
+  selectTool,
+  stitchRequiresTarget,
+  type PlacementResult,
+  type PlacementState,
+} from "@/lib/tool-placement";
 import { computeScheme, type ComputeResult } from "@/lib/wasm";
 
 // react-three-fiber touches `window` on import — must never run during SSR.
@@ -20,29 +30,68 @@ interface EditorAppProps {
 }
 
 export default function EditorApp({ initialStitches, initialSlug, initialName }: EditorAppProps) {
-  const [stitches, setStitches] = useState<WireStitch[]>(initialStitches ?? PRESETS[0].scheme.stitches);
+  // Empty by default (M8): the app starts with just the undecorated
+  // starting yarn stub (see YarnViewer), ready to build from scratch by
+  // clicking tools/render — not a preloaded example. Presets remain
+  // available as alternate starting points via the header buttons.
+  const [stitches, setStitches] = useState<WireStitch[]>(initialStitches ?? []);
+  const [placement, setPlacement] = useState<PlacementState>(INITIAL_PLACEMENT_STATE);
+  const [loopTarget, setLoopTarget] = useState<LoopTarget>("Both");
+  const [capacityOverride, setCapacityOverride] = useState<CapacityStyle | "">("");
   // `slug` tracks the *currently saved* link, if any — cleared implicitly
   // never; once a scheme has a slug, further saves overwrite it in place
   // (see actions.ts) rather than minting a new link on every edit+save.
   const [slug, setSlug] = useState<string | undefined>(initialSlug);
   const [name, setName] = useState<string>(initialName ?? "");
 
+  // A single place where "a placement decision happened" (tool select,
+  // stitch click, empty-space click — see lib/tool-placement.ts) turns
+  // into an actual WireStitch, so the three call sites below don't
+  // duplicate this. Also guards against the newly-active tool becoming
+  // unavailable as a direct result of the placement (e.g. `mr` right
+  // after it places the very first stitch) — without this the palette
+  // would show a tool as both "active" and "disabled" at once.
+  const applyPlacementResult = (result: PlacementResult) => {
+    if (!result.place) {
+      setPlacement(result.state);
+      return;
+    }
+    const { kind, targets } = result.place;
+    const newStitch: WireStitch = {
+      kind,
+      targets,
+      ...(stitchRequiresTarget(kind) && loopTarget !== "Both" ? { loop_target: loopTarget } : {}),
+      ...(capacityOverride ? { capacity_override: capacityOverride } : {}),
+    };
+    // Uses the `stitches` this render closed over, not a functional
+    // updater — each call is one discrete synchronous click event, never
+    // concurrent with another, so this is safe and avoids calling
+    // setPlacement from inside setStitches's updater (which would violate
+    // the updater's purity contract).
+    const nextStitches = [...stitches, newStitch];
+    setStitches(nextStitches);
+    setPlacement(isToolAvailable(result.state.activeTool!, nextStitches.length) ? result.state : INITIAL_PLACEMENT_STATE);
+  };
+
+  const loadScheme = (newStitches: WireStitch[]) => {
+    setStitches(newStitches);
+    setPlacement(INITIAL_PLACEMENT_STATE);
+    setSlug(undefined);
+    setName("");
+  };
+
   return (
     <div className="flex h-dvh w-dvw flex-col bg-[#141414] text-zinc-200">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-3">
         <h1 className="text-sm font-medium tracking-wide text-zinc-400">
-          crochet-sim <span className="text-zinc-600">— M6 editor</span>
+          crochet-sim <span className="text-zinc-600">— M8 editor</span>
         </h1>
         <div className="flex flex-wrap gap-2">
           {PRESETS.map((preset) => (
             <button
               key={preset.name}
               title={preset.description}
-              onClick={() => {
-                setStitches(preset.scheme.stitches);
-                setSlug(undefined);
-                setName("");
-              }}
+              onClick={() => loadScheme(preset.scheme.stitches)}
               className="rounded bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700"
             >
               {preset.name}
@@ -56,13 +105,32 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
         <aside className="w-80 shrink-0 border-r border-zinc-800">
           <SchemeEditor
             stitches={stitches}
-            onAdd={(s) => setStitches((prev) => [...prev, s])}
-            onRemoveLast={() => setStitches((prev) => prev.slice(0, -1))}
-            onClear={() => setStitches([])}
+            placement={placement}
+            onSelectTool={(kind: StitchKind) => applyPlacementResult(selectTool(placement, kind, stitches.length))}
+            onRemoveLast={() => {
+              setStitches((prev) => prev.slice(0, -1));
+              // The removed stitch's index may no longer exist — drop any
+              // pending target selection rather than leave it pointing at
+              // a stitch that's gone.
+              setPlacement((p) => ({ ...p, pendingTargets: [] }));
+            }}
+            onClear={() => {
+              setStitches([]);
+              setPlacement(INITIAL_PLACEMENT_STATE);
+            }}
+            loopTarget={loopTarget}
+            onLoopTarget={setLoopTarget}
+            capacityOverride={capacityOverride}
+            onCapacityOverride={setCapacityOverride}
           />
         </aside>
 
-        <ComputePane stitches={stitches} />
+        <ComputePane
+          stitches={stitches}
+          placement={placement}
+          onStitchClick={(index: number) => applyPlacementResult(clickStitch(placement, index, stitches.length))}
+          onEmptySpaceClick={() => applyPlacementResult(clickEmptySpace(placement, stitches.length))}
+        />
       </div>
     </div>
   );
@@ -160,17 +228,29 @@ function SaveControls({
   );
 }
 
-function ComputePane({ stitches }: { stitches: WireStitch[] }) {
+function ComputePane({
+  stitches,
+  placement,
+  onStitchClick,
+  onEmptySpaceClick,
+}: {
+  stitches: WireStitch[];
+  placement: PlacementState;
+  onStitchClick: (index: number) => void;
+  onEmptySpaceClick: () => void;
+}) {
   const [result, setResult] = useState<ComputeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Deliberately doesn't reset result/error to null when stitches is
-    // empty or while a new computation is in flight — the render below
-    // gates on `stitches.length` directly for the empty state, and briefly
-    // showing the previous scheme while the next one computes (rather
-    // than flashing to a loading state on every edit) is the better UX
-    // here anyway.
+    // empty or while a new computation is in flight — the viewer below
+    // gates its own empty-state stub on `stitches.length` directly, and
+    // keeps showing the previous scheme's tubes while the next
+    // computation runs (rather than flashing/disappearing on every single
+    // click) which matters more now than it did pre-M8: every click that
+    // places a stitch triggers a recompute, so this runs constantly
+    // during normal use, not just on the rare manual edit.
     if (stitches.length === 0) return;
     let ignore = false;
     computeScheme({ stitches })
@@ -190,25 +270,37 @@ function ComputePane({ stitches }: { stitches: WireStitch[] }) {
 
   return (
     <main className="relative flex-1">
-      {stitches.length > 0 && result && (
-        <div className="absolute inset-0">
-          <YarnViewer segments={result.segments} stitches={stitches} />
-        </div>
-      )}
-      {stitches.length === 0 && (
-        <div className="flex h-full items-center justify-center text-zinc-500">
-          Add a stitch, or load a preset, to get started.
-        </div>
-      )}
+      <div className="absolute inset-0">
+        <YarnViewer
+          segments={result?.segments ?? []}
+          stitches={stitches}
+          pendingTargets={placement.pendingTargets}
+          hasActiveTool={placement.activeTool !== null}
+          onStitchClick={onStitchClick}
+          onEmptySpaceClick={onEmptySpaceClick}
+        />
+      </div>
+
       {stitches.length > 0 && !result && !error && (
-        <div className="flex h-full items-center justify-center text-zinc-500">Computing scheme…</div>
+        <div className="pointer-events-none absolute inset-x-0 top-4 text-center text-xs text-zinc-500">
+          Computing scheme…
+        </div>
       )}
       {error && (
-        <div className="flex h-full items-center justify-center px-8 text-center text-red-400">Error: {error}</div>
+        <div className="pointer-events-none absolute inset-x-0 top-4 px-8 text-center text-xs text-red-400">
+          Error: {error}
+        </div>
       )}
 
-      {result && (
-        <div className="absolute bottom-4 left-4 rounded-md border border-zinc-800 bg-[#1c1c1c]/90 px-4 py-3 text-sm shadow-lg backdrop-blur">
+      {/* `stitches.length > 0` (not just `result`) — otherwise a Clear
+          leaves the last scheme's stats visibly on screen, including a
+          stale "Flagged" reading for a now-empty scheme that has nothing
+          to be flagged. `result` itself is deliberately left stale during
+          an in-flight recompute of a *non-empty* scheme, per the effect's
+          own comment above — this only hides it for the genuinely-empty
+          case. */}
+      {stitches.length > 0 && result && (
+        <div className="pointer-events-none absolute bottom-4 left-4 rounded-md border border-zinc-800 bg-[#1c1c1c]/90 px-4 py-3 text-sm shadow-lg backdrop-blur">
           <div className="mb-1 font-medium text-zinc-300">Model Statistics</div>
           <StatRow label="Stitches" value={result.stitch_count} testId="stat-stitches" />
           <StatRow
