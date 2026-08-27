@@ -1,10 +1,11 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M8 done. Two Owner-reported fixes on top of M8 landed 2026-08-28
-(decrease-mode toggle; a real, only-partially-fixed ring-closure bug) —
-see progress log. Pending Owner review/sign-off against the acceptance
-criteria below before moving to Completed.**
+**M1-M8 done. M9-M12 added 2026-08-28: a proper rope-physics rewrite
+(Discrete Elastic Rods + collision-preventing contact) — the ring-closure
+bug traced back to the relaxation solver never having real bending
+resistance, and the Owner clarified this was the actually-agreed MVP
+scope, not a nice-to-have. In progress.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -116,8 +117,114 @@ sign-off before M1 starts):
       the new build-from-scratch flow. Acceptance: Owner can build a
       scheme (including at least one decrease) entirely by selecting
       tools and clicking the render, with no form fields involved.
+- [ ] M9 — Discrete Elastic Rod mechanics (2026-08-28, Owner-directed —
+      "a real rope simulation as was agreed for the mvp", reference
+      material: Owner-supplied report on 1D deformable-structure
+      simulation methods). Replaces `relax.rs`'s plain point-mass Hookean-
+      spring solver — which has *no bending or twist resistance at all* —
+      with a proper Discrete Elastic Rod (DER, Bergou et al.) formulation
+      along each thread's working-order backbone: a Bishop (parallel-
+      transported, twist-free) reference frame per edge, a single scalar
+      twist angle per edge encoding the material frame, and stretch +
+      bend + twist energy solved via XPBD-style constraint projection
+      (tractable in Rust — no Newton solver needed, unlike the report's
+      full-FEM/IPC path). Insertion-target relationships stay conceptually
+      what they already are — attachment constraints pulling a rod vertex
+      toward its target's position — not part of the rod's own bend/twist
+      math; the graph's branching (shared targets, decreases) lives at
+      that layer, same as today. Acceptance: a chain closed into a ring
+      with a slip stitch actually bows into a non-self-intersecting
+      circle (the concrete bug that surfaced this whole milestone), and
+      every existing calibrated behavior (magic-ring capacity/wave
+      thresholds, shell/capacity sizes, front/back-loop offsets, the
+      dc/tr/dtr differential-pull demo) still holds after re-verification
+      against the new solver — this replaces the engine everything else
+      was built and tuned against, so nothing gets a pass without
+      re-checking.
+- [ ] M10 — Continuous collision detection (CCD). Edge-edge time-of-
+      contact computation (coplanarity → cubic root-finding) between
+      moving rod segments across a solve step, robust enough not to
+      silently tunnel through near-parallel/near-coplanar edges (the
+      report's documented classic failure mode of naive floating-point
+      CCD) — doesn't need the report's full exact-arithmetic machinery
+      (TightCCD/Bernstein Sign Classification, Exact Root Parity) on the
+      first pass, but must be validated against deliberately-adversarial
+      near-degenerate test cases, not just easy ones. Acceptance: given a
+      scene where two segments are moving toward an intersection, the
+      solver correctly detects the collision and its time, including
+      near-parallel/near-coplanar cases that make naive root-finding
+      unreliable.
+- [ ] M11 — Barrier-based contact response (C-IPC-lite). Segments that
+      CCD flags as approaching each other get pushed apart via a barrier-
+      style potential (large, smooth repulsion near the yarn-thickness
+      threshold, zero beyond it) integrated into the XPBD solve, so the
+      *relaxed shape itself* never actually interpenetrates — self-
+      intersection becomes something the solver prevents during
+      settling, not just something `validate.rs` flags afterward.
+      Explicitly a simplified analogue of the report's full Newton/
+      barrier-energy IPC formulation (XPBD-style constraint projection,
+      not a full unconstrained-optimization line search) — real
+      engineering, scoped down from the research-grade original for
+      tractability, documented as such rather than overclaimed.
+      Acceptance: deliberately-adversarial starting configurations (e.g.
+      overlapping/crossing geometry that used to only get flagged) settle
+      into a genuinely non-intersecting configuration instead.
+- [ ] M12 — Integration, full regression, redeploy. Re-verify every
+      existing test and calibrated behavior against the M9-M11 solver
+      stack end to end, re-tune any constants that need it (documenting
+      why), update `docs/crochet-context.md`/`HANDOVER.md` for the new
+      physics model, verify in a real browser (including the M7 tube
+      rendering and M8 click-to-place flows still work against the new
+      solver's output), and redeploy.
 
 **Progress log** (newest first):
+- 2026-08-28 — **M9 in progress — ring-closure bug genuinely fixed;
+  full DER replacement still open, not marked done.** Built the DER
+  geometry foundation (`core/src/rod.rs`: Bishop frames, parallel
+  transport, curvature binormal, 15 tests) plus `Vec3::cross`/
+  `normalized` it needed. Root-caused why the earlier partial fix (below)
+  still crumpled: a perfectly straight starting chain has zero curvature
+  everywhere, so nothing driven by real bending physics has anything to
+  act on without symmetry-breaking first. Fixed with two pieces tested in
+  order (bending alone: insufficient; a lone symmetry seed: insufficient,
+  as already found once below; both together: correct) — a
+  second-neighbour bending spring (`BENDING_STIFFNESS`, `relax.rs`) plus a
+  much smaller replacement symmetry seed (`CHAIN_SYMMETRY_BREAK_AMPLITUDE
+  = 0.001`, two orders of magnitude below the earlier-reverted 0.03,
+  `geometry.rs`). New regression test
+  `slip_stitch_join_closes_a_chain_into_a_genuine_non_intersecting_ring`
+  asserts the real bar: substantial movement, `ss` lands near target,
+  *and* `check_self_intersections(...).ok == true` with zero violations.
+  `cargo test --workspace` (67 core + 6 wasm), clippy, fmt clean; `npm run
+  lint`/`test:unit` (45/45)/`build` clean after rebuilding wasm bindings.
+  Manually verified in a real browser against the Owner's exact reported
+  scenario (6 chains + `ss -> [0]`): `Status: OK`, visibly bent/cornered
+  shape instead of the original straight-with-intersections. **Being
+  explicit about what this is not**: this uses a plain distance spring for
+  bending, not `rod.rs`'s actual curvature-binormal energy — `rod.rs` is
+  built and tested but not yet wired into the solve. M9's own acceptance
+  criteria call for a genuine DER formulation (curvature-driven bending,
+  ideally a constraint-projection solve, not force-based Euler
+  integration), so this milestone stays unchecked below despite the
+  concrete bug being resolved — full account, including exactly what's
+  left, in `HANDOVER.md`. Next: commit + redeploy this real fix, then
+  continue wiring the actual DER energy into `relax.rs` before M9 can be
+  checked off.
+- 2026-08-28 — Owner: the ring-closure bug's root cause (no bending
+  resistance in the relaxation solver at all) means the fix isn't a
+  targeted patch — "a real rope simulation as was agreed for the mvp"
+  is the actual scope, with a reference report on 1D deformable-structure
+  simulation methods (Cosserat/Kirchhoff rod theory, FEM shear-locking,
+  PBD/XPBD, Discrete Elastic Rods, IPC/C-IPC contact barriers, CCD
+  robustness). Synthesized into a recommendation (DER for rod mechanics
+  via XPBD, since a Newton-based full-IPC solve is a much larger,
+  research-grade undertaking) and asked the Owner how far to take it;
+  chose the full combination — DER *and* real collision-preventing
+  contact (C-IPC-lite), not DER alone. Planned as M9-M12 above (rod
+  mechanics; CCD; barrier contact response; integration/regression). This
+  replaces the physics engine M2 built and every later milestone's
+  calibration was tuned against, so M12's regression pass is not optional
+  ceremony — it's the actual acceptance test for the whole rewrite.
 - 2026-08-28 — Two Owner-reported issues on top of M8, fixed same day.
   (1) **Decrease mode is now an explicit toggle, not the default** —
   every target-requiring placement used to require select-target-then-

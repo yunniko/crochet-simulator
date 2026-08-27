@@ -19,6 +19,12 @@ use crate::vec3::Vec3;
 
 /// Horizontal step between successive links of a chain with no target.
 const CHAIN_STEP_X: f64 = 1.0;
+/// M9: a tiny, deterministic sideways seed on each chain link's raw
+/// placement — see its use below. Small enough that an ordinary
+/// (never-closed) chain still reads as visually straight; only matters
+/// once real bending resistance (relax.rs's `BENDING_STIFFNESS`) has
+/// something non-collinear to actually smooth into a curve.
+const CHAIN_SYMMETRY_BREAK_AMPLITUDE: f64 = 0.001;
 /// How many siblings comfortably share one target before it's under
 /// strain — the Owner's own calibration (docs §5a): "seven is hard but
 /// possible [into one stitch], eleven won't fit"; a tightened magic ring
@@ -254,7 +260,29 @@ pub fn place_scheme(
                     // same spot — a ring, not a line (docs §5a).
                     let base = prev_top.unwrap_or(Vec3::ZERO);
                     let top = if def.lays_out_as_line {
-                        base + Vec3::new(CHAIN_STEP_X, 0.0, 0.0)
+                        // The tiny sideways seed matters only when a
+                        // later stitch closes this chain back into a ring
+                        // (`ch N, ss` targeting an earlier chain, see
+                        // relax.rs's `SLIP_STITCH_CONTINUITY_SLACK`): a
+                        // perfectly straight, perfectly collinear line
+                        // leaves every relaxation force — including M9's
+                        // new bending resistance — exactly on that same
+                        // axis too (confirmed empirically: without this,
+                        // a ring-closing pull still just compresses the
+                        // chain along its own line rather than curving,
+                        // since the bending force itself computes to
+                        // exactly zero for perfectly collinear input).
+                        // This seed breaks that exact symmetry; bending
+                        // resistance (not present when this trick was
+                        // tried without it — see HANDOVER.md's account of
+                        // that failed attempt) is what turns the seed
+                        // into a genuinely smooth curve instead of an
+                        // arbitrary crumple. Doesn't accumulate into a
+                        // net curve (no scheme needs an *inherently*
+                        // curved open chain), so an ordinary chain that's
+                        // never closed stays visually straight either way.
+                        let seed = CHAIN_SYMMETRY_BREAK_AMPLITUDE * (i as f64 * PI / 2.0).sin();
+                        base + Vec3::new(CHAIN_STEP_X, seed, 0.0)
                     } else {
                         base
                     };

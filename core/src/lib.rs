@@ -9,6 +9,7 @@ pub mod geometry;
 pub mod graph;
 pub mod path;
 pub mod relax;
+pub mod rod;
 pub mod stitch;
 pub mod validate;
 pub mod vec3;

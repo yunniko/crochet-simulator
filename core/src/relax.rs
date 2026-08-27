@@ -38,6 +38,28 @@ use crate::vec3::Vec3;
 /// strand of yarn regardless of what's formed at either end.
 const CONTINUITY_STIFFNESS: f64 = 0.6;
 
+/// M9: bending resistance, realized as a spring between each vertex's two
+/// *second* working-order neighbours (`i-2` and `i`, spanning across
+/// vertex `i-1`) rather than a full analytic Discrete-Elastic-Rod
+/// curvature-gradient projection — see `rod.rs`'s module docs for the
+/// underlying DER math this approximates and why an XPBD-projection layer
+/// wasn't worth the added integration complexity here: this solver's
+/// existing spring forces are already empirically stable at the stiffness
+/// values in use (nothing here pushes toward the near-infinite-stiffness
+/// regime XPBD specifically exists to stabilize), so extending the same
+/// proven force-based mechanism to a second-neighbour pair is the lower-
+/// risk way to add genuine bending resistance. The rest length is the
+/// *raw*-placement second-neighbour distance (mirroring every other
+/// spring's rest-length convention) — for an initially-straight run this
+/// is the sum of the two edge lengths (the maximum possible second-
+/// neighbour distance), so the spring's preferred state is "stay as
+/// straight as this thread started," which is exactly what resists an
+/// external pull from concentrating all the curvature at one sharp fold:
+/// bending a little at *every* interior vertex costs less energy than
+/// bending a lot at one, so the whole run distributes curvature smoothly
+/// under an end-closing force instead of kinking.
+const BENDING_STIFFNESS: f64 = 0.5;
+
 /// The continuity edge leading *into* a slip stitch uses this instead of
 /// the raw-placement distance every other stitch's continuity edge uses —
 /// see that edge's own comment below for why. Near-zero rather than
@@ -156,19 +178,13 @@ pub fn relax_scheme(
                 // 150 steps are a no-op, not just slow to converge).
                 // Giving `ss` its real near-zero slack instead means that
                 // edge actually pulls the chain's ends together, rather
-                // than sitting inert. **Not the whole fix**: the chain
-                // still starts out perfectly collinear (raw placement
-                // lays every `ch` on one straight line, see
-                // `geometry.rs`'s `lays_out_as_line`), so this pull alone
-                // folds it back onto itself rather than bowing it into a
-                // clean, non-self-intersecting circle — there's no
-                // out-of-line component for the force to curl around.
-                // Getting an actual circular closure needs raw placement
-                // to recognise "this chain closes into a ring" ahead of
-                // time and lay it out on a real arc (parallel to how a
-                // magic ring's children get radial placement) — scoped
-                // as real follow-up work, not attempted here. See
-                // `HANDOVER.md`.
+                // than sitting inert — see `BENDING_STIFFNESS` above for
+                // the other half (M9): without genuine bending resistance,
+                // that pull alone just folded the chain back onto itself,
+                // since raw placement lays every `ch` on one perfectly
+                // straight line (`geometry.rs`'s `lays_out_as_line`) with
+                // no out-of-line component for a plain pull to curl
+                // around.
                 let rest_length = if stitch.kind == SS {
                     SLIP_STITCH_CONTINUITY_SLACK
                 } else {
@@ -181,6 +197,22 @@ pub fn relax_scheme(
                     b: prev,
                     rest_length,
                     stiffness: CONTINUITY_STIFFNESS,
+                });
+            }
+
+            // M9 bending resistance — see `BENDING_STIFFNESS`'s own
+            // comment for the mechanism. Needs a second predecessor, so
+            // only from the third stitch in a thread onward.
+            if i > 1 {
+                let second_prev = StitchRef::new(thread_idx, i - 2);
+                let rest_length = raw.threads[thread_idx][i]
+                    .top
+                    .distance(&raw.threads[thread_idx][i - 2].top);
+                constraints.push(SpringConstraint {
+                    a: r,
+                    b: second_prev,
+                    rest_length,
+                    stiffness: BENDING_STIFFNESS,
                 });
             }
         }
@@ -439,31 +471,34 @@ mod tests {
 mod slip_stitch_join_tests {
     use super::*;
     use crate::graph::{StitchInstance, Thread};
+    use crate::path::relaxed_yarn_segments;
     use crate::stitch::CH;
+    use crate::validate::{check_self_intersections, DEFAULT_YARN_DIAMETER};
 
-    /// Regression test for a real bug: joining a chain into a ring with a
-    /// slip stitch (`ch 6, ss` into the first chain — an extremely common
-    /// real technique) used to be a complete no-op under relaxation. Root
-    /// cause: raw placement lays a chain out perfectly straight with no
-    /// idea a later stitch closes it, so the *raw* distance from the
-    /// chain's far end to the join point already equals the chain's own
-    /// straight-line length — the continuity spring meant to pull the
-    /// ring shut started out already "satisfied" by the straight shape,
-    /// so literally zero force ever acted (confirmed empirically: 150
-    /// relaxation steps moved nothing, not even slightly). Fixed by
-    /// giving a slip stitch's own continuity edge its real near-zero
-    /// slack instead of that raw distance.
-    ///
-    /// This only asserts the fix's actual, honest scope: the join spring
-    /// is no longer inert, so relaxation *does* pull the ends together.
-    /// It deliberately does NOT assert the scheme ends up a clean,
-    /// non-self-intersecting circle — it doesn't yet. Getting an actual
-    /// circular closure needs raw placement to recognise "this chain
-    /// closes into a ring" ahead of time and lay it out on a real arc
-    /// (parallel to how a magic ring's children get radial placement) —
-    /// scoped as follow-up work, not attempted here. See HANDOVER.md.
+    /// Regression test for a real, reported bug: joining a chain into a
+    /// ring with a slip stitch (`ch 6, ss` into the first chain — an
+    /// extremely common real technique) used to render straight with
+    /// flagged intersections instead of closing into a circle. Two
+    /// distinct fixes were needed, in order, and both are load-bearing —
+    /// see HANDOVER.md's M9 entry for the full account:
+    /// 1. `ss`'s continuity edge needed its own real near-zero slack
+    ///    (`SLIP_STITCH_CONTINUITY_SLACK`) instead of the raw-placement
+    ///    distance every other stitch's continuity edge uses — without
+    ///    this, the join spring was a literal no-op (confirmed
+    ///    empirically: 150 relaxation steps moved nothing at all, since
+    ///    raw placement's straight chain already exactly satisfies that
+    ///    spring's naive rest length).
+    /// 2. Real bending resistance (`BENDING_STIFFNESS`, M9's Discrete-
+    ///    Elastic-Rod-inspired second-neighbour spring — see `rod.rs`)
+    ///    plus a tiny deterministic symmetry-breaking seed in `ch`'s raw
+    ///    placement (`geometry.rs`'s `CHAIN_SYMMETRY_BREAK_AMPLITUDE`) —
+    ///    without *both*, a working join spring alone just folded the
+    ///    chain back onto itself (confirmed: bending resistance alone
+    ///    doesn't help either, since a perfectly collinear input makes
+    ///    the bending force itself compute to exactly zero too — nothing
+    ///    breaks the symmetry on its own).
     #[test]
-    fn slip_stitch_join_actually_pulls_the_chain_together() {
+    fn slip_stitch_join_closes_a_chain_into_a_genuine_non_intersecting_ring() {
         let registry = StitchRegistry::with_uk_basics();
         let mut thread = Thread::new();
         for _ in 0..6 {
@@ -478,10 +513,8 @@ mod slip_stitch_join_tests {
         let raw = place_scheme(&scheme, &registry).unwrap();
         let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
 
-        // Before the fix, every relaxed position was bit-for-bit
-        // identical to its raw position (a literal no-op). Now the far
-        // end of the chain (index 5) has been pulled substantially away
-        // from its raw position, back toward the join.
+        // The far end of the chain (index 5) has been pulled
+        // substantially away from its raw (straight-line) position.
         let raw_far_end = raw.threads[0][5].top;
         let relaxed_far_end = relaxed.position(StitchRef::new(0, 5)).unwrap();
         assert!(
@@ -492,8 +525,8 @@ mod slip_stitch_join_tests {
             relaxed_far_end
         );
 
-        // And the slip stitch itself should end up close to its target
-        // (chain 0) — a real near-zero-slack join, not floating far away.
+        // The slip stitch itself lands close to its target (chain 0) —
+        // a real near-zero-slack join, not floating far away.
         let ss_pos = relaxed.position(StitchRef::new(0, 6)).unwrap();
         let target_pos = relaxed.position(StitchRef::new(0, 0)).unwrap();
         assert!(
@@ -501,6 +534,17 @@ mod slip_stitch_join_tests {
             "expected the slip stitch to land close to its target: ss={:?} target={:?}",
             ss_pos,
             target_pos
+        );
+
+        // The actual acceptance bar: the closed ring is a genuine,
+        // self-intersection-free loop, not just "moved."
+        let segments = relaxed_yarn_segments(&scheme, &registry, &relaxed).unwrap();
+        let report = check_self_intersections(&segments, DEFAULT_YARN_DIAMETER);
+        assert!(
+            report.ok,
+            "expected the closed ring to validate cleanly, found {} violation(s): {:?}",
+            report.violations.len(),
+            report.violations
         );
     }
 }

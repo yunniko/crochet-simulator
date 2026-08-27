@@ -958,6 +958,96 @@ regression test that came out of this):
   earlier one) — scoped, real work, not attempted further this session.
   Flagged to the Owner as a candidate for its own milestone.
 
+**M9 in progress (2026-08-28): DER foundation built; ring-closure bug now
+genuinely fixed, but this is *not* the full M9 replacement yet — reported
+honestly rather than checking the milestone off early.** Owner, right
+after the above partial fix, reframed the scope: "the thing require to
+scope is a real rope simulation as was agreed for the mvp," with a
+reference report on 1D deformable-structure simulation (Cosserat/Kirchhoff
+rod theory, PBD/XPBD, Discrete Elastic Rods, IPC/C-IPC contact, CCD).
+Asked how far to take it (DER rod mechanics alone vs. DER + real
+collision-preventing contact); Owner chose the larger option — both. Full
+plan logged as M9-M12 in `GOALS.md`.
+
+This session's concrete work toward M9:
+- **New `core/src/vec3.rs` primitives**: `cross()` and `normalized()` —
+  needed for any rod-frame math, didn't exist before (the solver had never
+  needed anything beyond `dot`/`distance`/`length`).
+- **New `core/src/rod.rs`**: the actual Discrete Elastic Rod geometry —
+  `parallel_transport` (Rodrigues' rotation, with a degenerate-tangent
+  fallback), `bishop_frames_along` (propagates a twist-free reference frame
+  along a polyline edge by edge), `curvature_binormal` (the real DER
+  curvature measure, `2(e_prev×e_curr)/(|e_prev||e_curr| + e_prev·e_curr)`,
+  zero for collinear edges by construction — this is *why* it's relevant to
+  the ring-closure bug: a perfectly straight chain has zero curvature
+  binormal everywhere, so anything driven purely by this measure has
+  nothing to act on without the perfectly-straight symmetry being broken
+  first). 15 unit tests, all passing. Deliberately staged/simplified within
+  its own scope, documented in the module's own doc comment: stretch+bend
+  now, twist deferred (M9's actual acceptance criterion — the ring bug — is
+  a bending problem, not a twist one); isotropic bending only (single
+  scalar, not a full anisotropic 2×2 B matrix — yarn is round, not
+  ribbon-shaped); insertion-target branching (shared targets, decreases)
+  stays outside this module entirely, same as before — it's an external
+  attachment constraint, not part of a rod's own bend math.
+- **What's *not* done yet, stated plainly**: `rod.rs` is pure geometry
+  math, fully tested in isolation, but **not yet wired into `relax.rs`'s
+  actual force computation**. The ring-closure fix that follows uses a
+  much simpler mechanism — a second-neighbour Hookean spring, not
+  `rod.rs`'s curvature-binormal energy — as a deliberate, documented
+  pragmatic choice (see `BENDING_STIFFNESS`'s doc comment in `relax.rs`):
+  it reuses the existing proven force-based solver instead of standing up
+  a whole separate XPBD constraint-projection subsystem, at lower risk,
+  and it's enough to satisfy M9's stated acceptance test (the ring closes
+  cleanly). But **it is not the DER formulation M9 was scoped as** — a real
+  DER bending energy computed from `curvature_binormal` via the Bishop
+  frame, and an XPBD-style projection solve (or equivalent) replacing the
+  current force-based Euler integration, is still open work before M9 can
+  honestly be marked done. `rod.rs` exists so that work has a tested
+  foundation to build on, not as a demonstration that it's finished.
+- **The actual fix applied** (`relax.rs` + `geometry.rs`): added
+  `BENDING_STIFFNESS` (0.5) — a spring between each stitch and its
+  *second* predecessor in working order (`i` to `i-2`), rest length taken
+  from raw placement, active from the third stitch in a thread onward.
+  This alone was tested and found **insufficient** — a perfectly collinear
+  starting chain has this second-neighbour distance already exactly
+  satisfied too (three points on a line: the 0-2 distance is already
+  correct even completely straight), so it exerts zero force on a straight
+  input, same failure mode as the original continuity-spring bug. Added
+  back a much smaller, now load-bearing symmetry-breaking seed —
+  `CHAIN_SYMMETRY_BREAK_AMPLITUDE` (0.001) in `geometry.rs`'s chain
+  placement, two orders of magnitude smaller than the earlier-tried-and-
+  reverted wobble (0.03) — just enough deterministic sideways offset to
+  give the new bending spring *something* to curl around, without being
+  large enough to visibly distort a straight chain's rendering on its own.
+  Tested in this order deliberately (bending alone: insufficient; seed
+  alone, previously: made things worse; both together: correct) so the
+  reasoning is reproducible, not a lucky combination.
+- **Verified**: `cargo test -p crochet-core` (67/67, was 66 after merging
+  the old partial-fix test with a new one), `cargo test --workspace`
+  (includes `crochet-wasm`'s 6), `cargo clippy --workspace --all-targets`
+  and `cargo fmt --all --check` both clean. The old
+  `slip_stitch_join_actually_pulls_the_chain_together` test (which could
+  only honestly assert partial movement, per the earlier entry above) was
+  replaced with
+  `slip_stitch_join_closes_a_chain_into_a_genuine_non_intersecting_ring`,
+  asserting the real, complete bar: the chain's far end moves substantially
+  from its raw position, the `ss` lands near its target, *and*
+  `check_self_intersections(...)` reports `ok == true` with zero
+  violations — not just "moved," but "actually closed, no overlaps."
+  Rebuilt the wasm bindings and re-ran `npm run lint` / `test:unit` (45/45)
+  / `build`, all clean. **Manually verified in a real browser**, the actual
+  reported scenario: built 6 chains by clicking the render, added
+  `ss -> [0]`, confirmed `Status: OK` and a visibly bent/cornered shape
+  (not the original straight line with overlapping segments) — matching
+  the Rust-side `ok=true, violations=0` result.
+- **Not yet done**: commit/push/redeploy of this fix (pending as of this
+  entry — see Next steps), and the remaining M9 work (wiring `rod.rs`'s
+  actual curvature-binormal energy into the solve, replacing the naive
+  second-neighbour spring, ideally via a real constraint-projection scheme
+  rather than force-based Euler integration) plus all of M10-M12
+  (collision detection, barrier contact, full regression/redeploy).
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**
@@ -1030,11 +1120,17 @@ step would.
 
 ## Next steps
 
-M6 (persistence + deploy): save/load schemes to Postgres (matching the
-portfolio's existing pattern — see `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`),
-then deploy following the standard pattern there, verified end-to-end in a
-browser against the live URL. Pending Owner sign-off on M5 first, per
-standard milestone-boundary process.
+(Superseded — this note dates from just after M1; M2-M8 are all done, and
+M9-M12 are the current live scope. See `GOALS.md`'s milestone list and this
+file's M9-in-progress entry above for the real current state.)
+
+Immediate: commit and redeploy the M9 ring-closure fix (bending-resistance
+spring + symmetry seed) that's already verified but not yet pushed to the
+live server. Then continue M9 for real: wire `rod.rs`'s curvature-binormal
+math into `relax.rs`'s actual bending force (replacing the current
+second-neighbour-spring stand-in) before it can honestly be marked done,
+then M10 (CCD) → M11 (C-IPC-lite barrier contact) → M12 (integration/full
+regression/redeploy).
 
 ## Domain reference
 
