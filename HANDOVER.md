@@ -426,8 +426,8 @@ run test:e2e` (5/5) all clean. Also manually exercised in a real browser:
 all four presets (including the swapped-in freeform spike, confirmed
 clean/white segments not red), plus clearing and hand-adding a stitch.
 
-**M6 in progress (2026-08-25): persistence.** The deploy half of M6 is not
-started yet — see "Open questions for the Owner" below.
+**M6 done (2026-08-27): persistence + deploy.** Live at
+**https://crochet.app.craftodejnice.cz**.
 
 **Access model: no accounts, unguessable private links (Owner decision,
 2026-08-25).** The open question logged back at M1 ("do saved schemes
@@ -584,10 +584,53 @@ against exactly what's in git" — the two only diverge on untracked files
 like this one, but when they do, only a real fresh-clone deploy catches
 it.
 
-Not started: the deploy half of M6, and M7 (realistic yarn rendering,
-added 2026-08-25 — see GOALS.md). Goal G-001's milestone plan is in
-`GOALS.md`, approved by the Owner 2026-08-24 (M1-M6) and 2026-08-25 (M7
-added).
+**Deployed for real (2026-08-27), following
+`E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern.** This project
+had never been pushed anywhere — required two Owner-authorized detours
+before the deploy itself could happen, both logged here since they'll
+recur for any future Company project set up the same way:
+1. **GitHub repo.** Publishing/pushing is always-escalate (`VALUES.md`).
+   Owner created `github.com/yunniko/crochet-simulator` (public, empty)
+   and asked to push to it. Push was rejected by GitHub's email-privacy
+   protection — every local commit was authored with a different email
+   (`nikonorova@email.cz`) than the one already verified/public on the
+   Owner's GitHub account (`12hv89@gmail.com`, the email `when-we-meet`/
+   `listing-studio`'s already-pushed history uses). Owner explicitly
+   chose to rewrite history (`git filter-branch --env-filter`, all 12
+   commits, nothing had been pushed anywhere yet so this was safe) rather
+   than change GitHub's setting. **The local machine's *global* git
+   `user.email` is still the mismatched one** — every future commit in
+   *any* project on this machine will hit the same rejection until the
+   Owner either updates it themselves or fixes it on GitHub's side; not
+   changed here, since git config changes are the Owner's call, not
+   JulAI's, per the charter.
+2. **Live-server steps.** Confirmed via SSH that ports 30020/54322 were
+   genuinely free (not just per the doc's table), cloned over HTTPS into
+   `/var/www/repositories/crochet-simulator`, wrote `.env`, ran `docker
+   compose --profile app up -d --build` — hit the `web/public/` bug above
+   on the first attempt, fixed and re-deployed clean on the second. The
+   nginx vhost + `certbot` step needed root, so it was handed to the
+   Owner as an exact file + command list (a `sudo tee`-based copy, after
+   a first attempt using a heredoc the Owner's terminal couldn't paste
+   cleanly — worth remembering: prefer writing the file server-side via
+   SSH to a path the Owner can `sudo cp` from, over a heredoc they have to
+   paste themselves). DNS needed no work — `crochet.app.craftodejnice.cz`
+   already resolved to the host before any of this, via the same kind of
+   pre-existing wildcard `doily.app.craftodejnice.cz` already used.
+
+**Verified end-to-end against the live HTTPS URL, not just a health-check
+ping**: loaded the real site, confirmed the WASM pipeline computes
+correctly, saved a scheme (name + link both worked) and reloaded that
+exact `/s/<slug>` URL fresh to confirm the save round-tripped through the
+live Postgres. Then confirmed every *other* site/container on the shared
+host was undisturbed: `docker ps` showed identical uptimes for
+`when-we-meet-*`, `listing-studio-*`, `parley-*`, `hbbs`/`hbbr` before
+and after, and `meet.app.julienika.cz`, `craftale.eu`, and
+`grafana.julienika.cz` (401 — auth-gated, not down) all still respond.
+
+Not started: M7 (realistic yarn rendering, added 2026-08-25 — see
+GOALS.md). Goal G-001's milestone plan is in `GOALS.md`, approved by the
+Owner 2026-08-24 (M1-M6) and 2026-08-25 (M7 added).
 
 ## Decision record
 
@@ -773,20 +816,15 @@ Owner sign-off before M1 starts.
 
 ## Open questions for the Owner
 
-**Blocking the deploy half of M6.** `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s
-standard deploy pattern clones the project from a public HTTPS GitHub URL
-on the server (`claude_remote`'s SSH agent isn't set up for GitHub SSH,
-and both existing portfolio projects are public repos for exactly this
-reason). This project has never been pushed anywhere — `git remote -v` is
-empty, no GitHub repo exists for it yet. Creating one and pushing is
-"leaving the workspace" (`VALUES.md` — publishing) and the live-server
-deploy steps themselves are also always-escalate per `OPERATIONS.md` — so
-both need explicit Owner go-ahead before proceeding: specifically, (1)
-should a new GitHub repo be created for this project (public, matching
-`when-we-meet`/`listing-studio`'s reason for being public), under what
-name/account, and (2) confirm the actual live-server deploy steps
-(subdomain choice — `crochet.app.julienika.cz` fits the existing wildcard
-DNS pattern — and the port picks above) before they're run for real.
+None blocking right now.
+
+**Standing, not urgent**: the local Windows machine's global git
+`user.email` (`nikonorova@email.cz`) doesn't match the email verified on
+the Owner's GitHub account (`12hv89@gmail.com`) — every future commit,
+in any project, will hit GitHub's email-privacy push rejection until the
+Owner fixes one side or the other (see the M6 deploy account above for
+the full story). Not JulAI's to change unilaterally.
 
 Resolved: whether saved schemes need user accounts — see the access-model
-decision above (no accounts, unguessable links), 2026-08-25.
+decision above (no accounts, unguessable links), 2026-08-25. Resolved:
+GitHub hosting and the live deploy — see M6 above, 2026-08-27.

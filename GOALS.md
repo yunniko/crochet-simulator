@@ -75,7 +75,7 @@ sign-off before M1 starts):
       and geometry check as the Owner edits. Must support at least one
       non-row-based (freeform) scheme, not just conventional row/round
       patterns, to prove the editor isn't secretly row-locked.
-- [ ] M6 — Persistence + deploy: save/load schemes (Postgres, matching
+- [x] M6 — Persistence + deploy: save/load schemes (Postgres, matching
       portfolio pattern), then deploy following
       `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern, verified
       end-to-end in a browser against the live URL.
@@ -90,6 +90,24 @@ sign-off before M1 starts):
       abstraction they already are underneath the visual overlay.
 
 **Progress log** (newest first):
+- 2026-08-27 — **M6 done — deployed.** Live at
+  **https://crochet.app.craftodejnice.cz**. Owner created a new public
+  GitHub repo (`github.com/yunniko/crochet-simulator`) and asked to push
+  — GitHub rejected it over an email-privacy mismatch between this
+  machine's git identity and the Owner's verified GitHub email; Owner
+  chose to rewrite all 12 local commits' author/committer email rather
+  than change GitHub's setting (nothing had been pushed anywhere yet, so
+  safe). A second real bug surfaced only on the actual live deploy (not
+  caught by the earlier local Docker build): `web/public/` was untracked
+  by git (empty directories aren't tracked), so a genuine fresh clone had
+  no `public/` at all and the Dockerfile's `COPY` for it failed outright
+  — fixed with a tracked `.gitkeep`, redeployed clean. Verified for real:
+  the live HTTPS site computes schemes correctly and a save/reload
+  round-trips through the live Postgres, and every other site/container
+  on the shared host (`when-we-meet`, `listing-studio`, `parley`, Grafana)
+  was confirmed undisturbed (`docker ps` uptimes unchanged, all still
+  respond). DNS needed no work (wildcard already covered the subdomain).
+  Full account, including the exact detours, in `HANDOVER.md`.
 - 2026-08-25 — **M6 persistence done; deploy half blocked on Owner input.**
   Owner resolved the standing "accounts?" open question: no accounts,
   unguessable private links (each saved scheme gets a 12-char slug;

@@ -14,8 +14,7 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M5 done; M6 (persistence + deploy) in progress — persistence done,
-deploy blocked on an Owner decision (see `HANDOVER.md`'s open questions).
+M1–M6 done. **Live at https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
 siblings and correctly flags ~11+; a tightened magic ring reads as pointy
