@@ -632,6 +632,91 @@ Not started: M7 (realistic yarn rendering, added 2026-08-25 — see
 GOALS.md). Goal G-001's milestone plan is in `GOALS.md`, approved by the
 Owner 2026-08-24 (M1-M6) and 2026-08-25 (M7 added).
 
+**M7 done (2026-08-27/28): realistic yarn rendering.** Rendering-layer
+only, as required — no change to `core/`/`wasm/`'s geometry, relaxation,
+or validation at all this milestone.
+
+**`web/lib/yarn-shape.ts` (new, pure/framework-free, Vitest-tested).**
+Two pieces, matching the split M7's Owner-facing scoping conversation
+landed on (see GOALS.md's progress log entry from when M7 was created):
+- **Real thickness + smooth curves** (the "cheap" half): the WASM
+  bridge's flat `WasmSegment[]` list is one continuous polyline per
+  thread already (confirmed by reading `path.rs`'s construction order —
+  every segment's start coincides with the previous one's end, bridges
+  included) — `buildYarnStrands` walks it once, grouping consecutive
+  same-label segments (`stitch[i]` / `bridge[a->b]`) and merging adjacent
+  groups that share the same `flagged` status into one strand. Each
+  strand becomes one `THREE.CatmullRomCurve3` + `TubeGeometry` in
+  `YarnViewer.tsx`, radius `YARN_RADIUS` — mirrors
+  `crochet_core::validate::DEFAULT_YARN_DIAMETER` by hand (same pattern
+  as every other FFI-boundary constant/type in this project, see
+  `web/AGENTS.md`), so the render and the self-intersection checker agree
+  on how thick the yarn actually is.
+- **Per-stitch-kind "wiggle" template** (the real work): `dc`/`htr`/`tr`/
+  `dtr`/`trtr`/`quad_tr` (the postable kinds — the only ones with real
+  height, `core`'s `height() > 0`) each get a small twisting curve
+  (`buildStitchCurvePoints`) standing in for their actual yarn-over/loop
+  shape, built purely from that stitch's own base/top anchor points —
+  works correctly under capacity fan-out, front/back-loop offset, radial
+  ring placement, etc. without special-casing any of them, since it only
+  ever reasons about the real base→top vector the physics model already
+  produced. Wrap count scales with the model's own height ordering (1 for
+  `dc` up to 5 for `quad_tr`) purely for visual distinctiveness — **a
+  stylized approximation, explicitly not a literal simulation of
+  yarn-over counts**, documented in the module so it isn't later mistaken
+  for one. `ch`/`ss`/`mr` are zero-height point anchors in the physics
+  model (base === top) and get no wiggle at all — their visual character
+  comes from the plain connecting bridge curve around them, a real,
+  named scope limit (see below), not an oversight.
+
+**Known limitation, stated plainly rather than glossed over:** chains
+don't visually read as the small linked ovals real chain stitches are —
+they render as a smooth connecting curve, same as any bridge. Building
+that would mean shaping the *bridge* segments specifically between two
+`ch`/`ch` stitches, not a per-stitch template (bridges are shared
+connective tissue between any two stitches, not owned by one kind) — a
+different, separable piece of work, not attempted this milestone given
+`ch`/`ss`/`mr` sequences are a smaller fraction of most real schemes than
+the postable stitches this milestone does cover well.
+
+**A real debugging detour, worth recording so it isn't repeated:** after
+first implementing this, the viewer rendered a completely blank canvas
+with no console errors, across a hard reload and a brand-new tab —
+looked exactly like a code bug. Added temporary diagnostic logging
+(`console.log` inside the geometry-building `useMemo`) and confirmed the
+generated strand/geometry data was completely valid (correct point
+counts, a sane bounding sphere) — the geometry pipeline was never broken.
+The actual cause: a stale Turbopack dev-server cache serving an old
+compiled bundle despite the saved file being correct on disk. Fixed by
+stopping the dev server, deleting `.next/`, and restarting clean.
+**If a change to a client component silently doesn't seem to take effect
+in dev, even after a hard reload, suspect the Turbopack cache before the
+code** — this cost real time verifying (correctly) that the new code was
+right before realizing the *served* code wasn't the new code.
+
+**Verified for real**, not just built: manually exercised all four
+presets in a real browser after the cache fix — the flat circle and
+overloaded ring (with its red/flagged coloring correctly distributed
+across the overcrowded shares), the shell (visibly taller, more
+twisted `tr` posts next to a flat, un-wiggled `ch`), and the freeform
+spike (the spike `dc`'s reach back to stitch 0 clearly visible as a
+distinct, real strand). `npm run lint`, `npm run test:unit` (17/17, was
+10 — 7 new `yarn-shape.spec.ts` tests: curve continuity at both
+endpoints, zero-height kinds collapse to a point, non-axis-aligned
+base/top pairs don't produce NaNs, wiggle amplitude stays yarn-thickness-
+scaled, strand merging/splitting behaves correctly around flagged
+boundaries, and kind actually drives which template gets used), `npm run
+build`, `npm run test:e2e` (8/8, unchanged — none of them assert on
+canvas pixels, by design, see `web/AGENTS.md`) all clean from a fully
+clean `.next`/Turbopack cache. `cargo test`/`clippy`/`fmt` unaffected, as
+expected for a rendering-only milestone.
+
+Not started: nothing — M7 was the last milestone in G-001's plan besides
+whatever the Owner adds next. See GOALS.md for the full milestone list
+and what's still open (persistence/deploy's standing git-email config
+note, the cross-target local-density and decrease/multi-target-stitch
+geometric limitations, the chain-shape limitation just above).
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**

@@ -192,7 +192,7 @@ function ComputePane({ stitches }: { stitches: WireStitch[] }) {
     <main className="relative flex-1">
       {stitches.length > 0 && result && (
         <div className="absolute inset-0">
-          <YarnViewer segments={result.segments} />
+          <YarnViewer segments={result.segments} stitches={stitches} />
         </div>
       )}
       {stitches.length === 0 && (

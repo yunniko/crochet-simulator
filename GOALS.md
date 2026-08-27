@@ -1,7 +1,9 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**Milestone plan approved by Owner 2026-08-24. M1 in progress.**
+**All 7 planned milestones (M1-M7) done as of 2026-08-28 — pending Owner
+review/sign-off against the acceptance criteria below before moving to
+Completed.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -79,7 +81,7 @@ sign-off before M1 starts):
       portfolio pattern), then deploy following
       `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern, verified
       end-to-end in a browser against the live URL.
-- [ ] M7 — Realistic yarn rendering: render the yarn with real cylindrical
+- [x] M7 — Realistic yarn rendering: render the yarn with real cylindrical
       thickness (the yarn-diameter constant the validator already uses,
       not a flat line) along smooth draping curves, and give each stitch
       kind its own parametric curve template (the actual loop/wrap shape
@@ -90,6 +92,28 @@ sign-off before M1 starts):
       abstraction they already are underneath the visual overlay.
 
 **Progress log** (newest first):
+- 2026-08-28 — **M7 done — realistic yarn rendering.** New
+  `web/lib/yarn-shape.ts` (pure, Vitest-tested): real cylindrical
+  thickness along a smooth Catmull-Rom curve (radius mirrors
+  `DEFAULT_YARN_DIAMETER`, so the render and the self-intersection
+  checker agree on yarn thickness), plus a per-stitch-kind "wiggle"
+  standing in for each postable stitch's (`dc` through `quad_tr`) real
+  loop/wrap shape — built purely from that stitch's own base/top anchor
+  points, so it works correctly under capacity fan-out, front/back-loop
+  offset, and radial ring placement without special-casing any of them.
+  Named limitation: `ch`/`ss`/`mr` (zero-height point anchors in the
+  physics model) get no wiggle, so chains don't yet visually read as
+  linked ovals — would need shaping the *bridge* segments between two
+  chains specifically, a separate piece of work, not attempted here.
+  Hit a real debugging detour: the viewer rendered completely blank with
+  no errors after the first implementation — diagnostic logging proved
+  the geometry data was valid the whole time; the actual cause was a
+  stale Turbopack dev-server cache, fixed by clearing `.next/`. Verified
+  by hand in a real browser across all four presets after the fix.
+  `npm run test:unit` (17/17, was 10), `npm run lint`, `npm run build`,
+  `npm run test:e2e` (8/8, unchanged) all clean; `cargo test`/clippy/fmt
+  unaffected (rendering-only, no core/wasm changes, as required). Full
+  account in `HANDOVER.md`.
 - 2026-08-27 — **M6 done — deployed.** Live at
   **https://crochet.app.craftodejnice.cz**. Owner created a new public
   GitHub repo (`github.com/yunniko/crochet-simulator`) and asked to push

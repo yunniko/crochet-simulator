@@ -14,7 +14,8 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M6 done. **Live at https://crochet.app.craftodejnice.cz.**
+All 7 planned milestones (M1–M7) done. **Live at
+https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
 siblings and correctly flags ~11+; a tightened magic ring reads as pointy
@@ -25,13 +26,16 @@ property, determines stretchiness), and self-intersection / stitch-count
 validation on the relaxed shape. `wasm/` bridges it to the browser via
 `wasm-bindgen`, exposing one general `compute_scheme` call for whatever
 graph the UI builds. `web/` is a real scheme editor: add stitches, choose
-insertion targets/loop targets/capacity overrides, watch the 3D render and
-validation update live, and save a scheme to get an unguessable link back
-to reload/share it by — no accounts, see `HANDOVER.md`'s M6 access-model
-decision. See `GOALS.md` → G-001 for the milestone plan and progress log,
-and known/deferred limitations (a dense round's several increases can
-still collide with a *neighbouring* increase — flagged, not yet fixed;
-decrease/multi-target stitches get no capacity/ring geometric treatment).
+insertion targets/loop targets/capacity overrides, watch the yarn render
+live as real, thick, per-stitch-shaped 3D tubes (not flat lines — see
+`HANDOVER.md`'s M7 entry) with validation updating alongside it, and save
+a scheme to get an unguessable link back to reload/share it by — no
+accounts, see `HANDOVER.md`'s M6 access-model decision. See `GOALS.md` →
+G-001 for the milestone plan and progress log, and known/deferred
+limitations (a dense round's several increases can still collide with a
+*neighbouring* increase — flagged, not yet fixed; decrease/multi-target
+stitches get no capacity/ring geometric treatment; chains don't yet
+visually read as linked ovals in the renderer).
 
 ## Run locally
 

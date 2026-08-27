@@ -5,53 +5,55 @@ import { Canvas } from "@react-three/fiber";
 import { useMemo } from "react";
 import * as THREE from "three";
 
+import type { WireStitch } from "@/lib/stitch-kinds";
 import type { WasmSegment } from "@/lib/wasm";
+import { buildYarnStrands, YARN_RADIUS, type Vec3 } from "@/lib/yarn-shape";
 
 const YARN_COLOR = "#e8dcc8";
 const FLAGGED_COLOR = "#e8543f";
 
-function YarnLines({ segments }: { segments: WasmSegment[] }) {
-  // Two LineSegments meshes (ordinary + flagged) rather than one line per
-  // segment — a single draw call per colour is plenty for a design-tool-
-  // sized scheme and keeps this simple for M4's minimal viewer.
-  const { ordinary, flagged } = useMemo(() => {
-    const ordinaryPoints: number[] = [];
-    const flaggedPoints: number[] = [];
-    for (const s of segments) {
-      const target = s.flagged ? flaggedPoints : ordinaryPoints;
-      target.push(s.start.x, s.start.z, -s.start.y);
-      target.push(s.end.x, s.end.z, -s.end.y);
-    }
-    const toGeometry = (points: number[]) => {
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-      return geometry;
-    };
-    return {
-      ordinary: toGeometry(ordinaryPoints),
-      flagged: toGeometry(flaggedPoints),
-    };
-  }, [segments]);
+// Engine axes: x/y are the sibling-ring plane (`geometry.rs`), z is
+// stitch height — remapped here so height reads as "up" on screen
+// (three.js: y-up). Same remap M4 used for the flat-line renderer.
+function toThree(p: Vec3): THREE.Vector3 {
+  return new THREE.Vector3(p.x, p.z, -p.y);
+}
+
+function YarnTubes({ segments, stitches }: { segments: WasmSegment[]; stitches: WireStitch[] }) {
+  const tubes = useMemo(() => {
+    const strands = buildYarnStrands(segments, stitches);
+    return strands
+      .filter((s) => s.points.length >= 2)
+      .map((s) => {
+        const points = s.points.map(toThree);
+        const curve = new THREE.CatmullRomCurve3(points, false, "catmullrom", 0.5);
+        // Scale sample count with point count so a long strand (many
+        // stitches merged together, see yarn-shape.ts's strand-merging)
+        // doesn't come out visibly faceted.
+        const tubularSegments = Math.max(8, points.length * 3);
+        const geometry = new THREE.TubeGeometry(curve, tubularSegments, YARN_RADIUS, 10, false);
+        return { geometry, flagged: s.flagged };
+      });
+  }, [segments, stitches]);
 
   return (
     <>
-      <lineSegments geometry={ordinary}>
-        <lineBasicMaterial color={YARN_COLOR} linewidth={2} />
-      </lineSegments>
-      <lineSegments geometry={flagged}>
-        <lineBasicMaterial color={FLAGGED_COLOR} linewidth={3} />
-      </lineSegments>
+      {tubes.map((t, i) => (
+        <mesh key={i} geometry={t.geometry}>
+          <meshStandardMaterial color={t.flagged ? FLAGGED_COLOR : YARN_COLOR} roughness={0.85} metalness={0.05} />
+        </mesh>
+      ))}
     </>
   );
 }
 
 /**
- * Renders a relaxed yarn path (from `crate::path::relaxed_yarn_segments`,
- * via the WASM bridge). Engine axes: x/y are the sibling-ring plane
- * (`geometry.rs`), z is stitch height — remapped here so height reads as
- * "up" on screen (three.js: y-up).
+ * Renders the relaxed yarn path (from `crate::path::relaxed_yarn_segments`,
+ * via the WASM bridge) as real, thick, per-stitch-shaped yarn — see
+ * `lib/yarn-shape.ts` for the curve-generation logic and its documented
+ * limits (M7: rendering-layer only, doesn't touch core/wasm's geometry).
  */
-export default function YarnViewer({ segments }: { segments: WasmSegment[] }) {
+export default function YarnViewer({ segments, stitches }: { segments: WasmSegment[]; stitches: WireStitch[] }) {
   return (
     <Canvas
       camera={{ position: [4, 4, 6], fov: 45 }}
@@ -66,9 +68,10 @@ export default function YarnViewer({ segments }: { segments: WasmSegment[] }) {
       gl={{ preserveDrawingBuffer: true }}
     >
       <color attach="background" args={["#1a1a1a"]} />
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[5, 8, 5]} intensity={0.8} />
-      <YarnLines segments={segments} />
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[5, 8, 5]} intensity={1.1} />
+      <directionalLight position={[-4, -2, -5]} intensity={0.3} />
+      <YarnTubes segments={segments} stitches={stitches} />
       <OrbitControls makeDefault />
     </Canvas>
   );

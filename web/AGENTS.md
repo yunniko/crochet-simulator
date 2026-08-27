@@ -55,6 +55,24 @@ actual simulation engine — this is only the viewer). Goal/milestone plan:
 - react-three-fiber touches `window` on import — any component using it
   must be loaded via `next/dynamic(..., { ssr: false })`, never imported
   directly into a server component or a client component that might SSR.
+- **`lib/yarn-shape.ts` (M7)** turns the WASM bridge's flat segment list
+  into real, thick, per-stitch-shaped tube geometry — pure/framework-free
+  logic (no `three` import), consumed by `YarnViewer.tsx`. Rendering-layer
+  only, deliberately: it never touches `core`/`wasm`'s actual geometry,
+  only reinterprets the base/top points that geometry already produced.
+  Only postable stitches (`dc` and taller — `core`'s `height() > 0`) get a
+  wiggle; `ch`/`ss`/`mr` are zero-height point anchors in the physics
+  model and get none (a named limitation, not an oversight — see
+  `../HANDOVER.md`'s M7 entry for why chains still don't visually read as
+  linked ovals).
+- **If a client-component change doesn't seem to take effect in dev, even
+  after a hard reload or a brand-new tab, suspect a stale Turbopack cache
+  before the code.** Hit this concretely in M7: the viewer rendered
+  completely blank with zero console errors after an otherwise-correct
+  change; diagnostic logging proved the generated geometry data was valid
+  the whole time. Stopping the dev server, deleting `.next/`, and
+  restarting fixed it immediately. Worth trying early, not as a last
+  resort, if a change looks right on disk but the browser disagrees.
 - Two test layers, per Company standard: Playwright e2e (`tests/e2e/`,
   `npm run test:e2e`), asserting via `data-testid` hooks on the stats
   readout / stitch list, not on canvas pixels (visual correctness of the
