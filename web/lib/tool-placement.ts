@@ -30,11 +30,12 @@ export function isToolAvailable(kind: StitchKind, stitchCount: number): boolean 
 
 export interface PlacementState {
   activeTool: StitchKind | null;
-  // Accumulated target indices for a target-requiring tool, built up by
-  // clicking each target stitch in turn and confirmed by clicking the
-  // active tool button again (see `selectTool` below) — a single-target
-  // placement is just this flow with one click before confirming. Always
-  // empty for `ch`/`mr`, which never accumulate targets.
+  // Accumulated target indices for a target-requiring tool *in decrease
+  // mode* — built up by clicking each target stitch in turn and confirmed
+  // by clicking the active tool button again (see `selectTool` below).
+  // Outside decrease mode a single target click places immediately (see
+  // `clickStitch`), so this stays empty; always empty for `ch`/`mr` too,
+  // which never have a target to accumulate.
   pendingTargets: number[];
 }
 
@@ -85,8 +86,24 @@ export function selectTool(state: PlacementState, kind: StitchKind, stitchCount:
   return unchanged({ activeTool: kind, pendingTargets: [] });
 }
 
-/** Clicking an existing stitch's rendered shape. */
-export function clickStitch(state: PlacementState, index: number, stitchCount: number): PlacementResult {
+/**
+ * Clicking an existing stitch's rendered shape.
+ *
+ * `decreaseMode` is an explicit opt-in, not the default: most placements
+ * are single-target, so making every one of them a two-click "select
+ * target, then click the tool again to confirm" affair would add a
+ * needless click to the common case. With it off (the default), a single
+ * click on a target immediately places the stitch. With it on, clicks
+ * accumulate into a pending multi-target selection instead — confirmed
+ * by clicking the active tool button again (see `selectTool`) — for
+ * building a decrease.
+ */
+export function clickStitch(
+  state: PlacementState,
+  index: number,
+  stitchCount: number,
+  decreaseMode: boolean,
+): PlacementResult {
   const tool = state.activeTool;
   if (!tool || !isToolAvailable(tool, stitchCount)) return unchanged(state);
 
@@ -94,6 +111,10 @@ export function clickStitch(state: PlacementState, index: number, stitchCount: n
     // ch/mr ignore *what* was clicked — any click places one, per the
     // model (they never have a target either way).
     return { state, place: { kind: tool, targets: [] } };
+  }
+
+  if (!decreaseMode) {
+    return { state, place: { kind: tool, targets: [index] } };
   }
 
   // Toggle the clicked stitch in/out of the pending target set, rather

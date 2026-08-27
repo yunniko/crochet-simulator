@@ -98,17 +98,37 @@ test("building a scheme by selecting tools and clicking the render, start to fin
   await clickEmptyCorner(page);
   await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
 
-  // A target-requiring tool: click the render to select a target, then
-  // the tool button again to confirm and place. Unlike ch, a miss here
-  // does nothing (no target-agnostic fallback), so this searches a grid
-  // of points rather than betting on one guessed coordinate landing on
-  // the actual rendered stitch — see clickUntil's own comment.
+  // A target-requiring tool, decrease mode off (the default): a single
+  // click on the render places immediately, no confirm click needed.
+  // Unlike ch, a miss does nothing (no target-agnostic fallback), so this
+  // searches a grid of points rather than betting on one guessed
+  // coordinate landing on the actual rendered stitch — see clickUntil's
+  // own comment.
+  await expect(page.getByTestId("decrease-mode-toggle")).not.toBeChecked();
   await page.getByTestId("tool-dc").click();
-  await expect(page.getByTestId("pending-targets")).toHaveText("No targets selected yet.");
-  await clickUntil(page, async () => (await page.getByTestId("pending-targets").textContent())?.includes("click \"dc\" again to place") ?? false);
-  await page.getByTestId("tool-dc").click();
+  await clickUntil(page, async () => (await page.getByTestId("stitch-count").textContent()) === "Stitches (3)");
 
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (3)");
   await expect(page.getByTestId("stitch-2")).toContainText("dc ->");
   await expect(page.getByTestId("stat-status")).toBeVisible();
+});
+
+test("decrease mode: a target click stays pending until confirmed, instead of placing immediately", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("tool-ch").click();
+  await clickNearOrigin(page); // one stitch to target — the only clickable geometry, so any hit must be it
+
+  await page.getByTestId("decrease-mode-toggle").check();
+  await page.getByTestId("tool-dc").click();
+  await expect(page.getByTestId("pending-targets")).toHaveText("No targets selected yet.");
+
+  await clickUntil(page, async () => (await page.getByTestId("pending-targets").textContent())?.includes("click \"dc\" again to place") ?? false);
+  // Still just the one chain — decrease mode holds the click as pending
+  // rather than placing immediately.
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (1)");
+
+  await page.getByTestId("tool-dc").click();
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
+  await expect(page.getByTestId("stitch-1")).toContainText("dc -> [0]");
 });

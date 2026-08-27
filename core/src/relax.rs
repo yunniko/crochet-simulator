@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::geometry::{place_scheme, PlacementError};
 use crate::graph::{Scheme, StitchRef};
-use crate::stitch::StitchRegistry;
+use crate::stitch::{StitchRegistry, SS};
 use crate::vec3::Vec3;
 
 /// Stiffness of the working-order continuity edge between consecutive
@@ -37,6 +37,14 @@ use crate::vec3::Vec3;
 /// stitch-kind-dependent (unlike insertion stiffness): it's the same
 /// strand of yarn regardless of what's formed at either end.
 const CONTINUITY_STIFFNESS: f64 = 0.6;
+
+/// The continuity edge leading *into* a slip stitch uses this instead of
+/// the raw-placement distance every other stitch's continuity edge uses —
+/// see that edge's own comment below for why. Near-zero rather than
+/// exactly zero: real yarn still has some thickness, and it keeps the
+/// spring's direction well-defined from the first relaxation step instead
+/// of starting exactly coincident.
+const SLIP_STITCH_CONTINUITY_SLACK: f64 = 0.05;
 /// Minimum distance same-target siblings try to keep from each other
 /// during relaxation, independent of whatever the springs alone produce.
 /// Larger than `crate::validate::DEFAULT_YARN_DIAMETER` (0.15) on
@@ -128,9 +136,46 @@ pub fn relax_scheme(
 
             if i > 0 {
                 let prev = StitchRef::new(thread_idx, i - 1);
-                let rest_length = raw.threads[thread_idx][i]
-                    .top
-                    .distance(&raw.threads[thread_idx][i - 1].top);
+                // Ordinary stitches: the raw-placement distance is a
+                // reasonable rest length — it reflects real row/round
+                // geometry (stitch spacing), and relaxation's job is to
+                // let that shape breathe a little, not erase it.
+                //
+                // Slip stitches are different: a real `ss` is a
+                // near-zero-slack join (the working loop pulled straight
+                // through, no extra yarn used), and using raw distance
+                // here breaks the common "chain N, slip stitch to the
+                // first chain to close it into a ring" pattern. Raw
+                // placement lays the chain out straight with no idea a
+                // later stitch will join back to its start, so the raw
+                // distance from the chain's far end to the join point
+                // already happens to equal the chain's own straight-line
+                // length — the very edge meant to pull the ring shut
+                // starts out already "satisfied" by the straight shape,
+                // and relaxation never moves anything (confirmed: all
+                // 150 steps are a no-op, not just slow to converge).
+                // Giving `ss` its real near-zero slack instead means that
+                // edge actually pulls the chain's ends together, rather
+                // than sitting inert. **Not the whole fix**: the chain
+                // still starts out perfectly collinear (raw placement
+                // lays every `ch` on one straight line, see
+                // `geometry.rs`'s `lays_out_as_line`), so this pull alone
+                // folds it back onto itself rather than bowing it into a
+                // clean, non-self-intersecting circle — there's no
+                // out-of-line component for the force to curl around.
+                // Getting an actual circular closure needs raw placement
+                // to recognise "this chain closes into a ring" ahead of
+                // time and lay it out on a real arc (parallel to how a
+                // magic ring's children get radial placement) — scoped
+                // as real follow-up work, not attempted here. See
+                // `HANDOVER.md`.
+                let rest_length = if stitch.kind == SS {
+                    SLIP_STITCH_CONTINUITY_SLACK
+                } else {
+                    raw.threads[thread_idx][i]
+                        .top
+                        .distance(&raw.threads[thread_idx][i - 1].top)
+                };
                 constraints.push(SpringConstraint {
                     a: r,
                     b: prev,
@@ -387,5 +432,75 @@ mod tests {
         for pos in relaxed.positions.values() {
             assert!(pos.is_finite(), "non-finite relaxed position: {:?}", pos);
         }
+    }
+}
+
+#[cfg(test)]
+mod slip_stitch_join_tests {
+    use super::*;
+    use crate::graph::{StitchInstance, Thread};
+    use crate::stitch::CH;
+
+    /// Regression test for a real bug: joining a chain into a ring with a
+    /// slip stitch (`ch 6, ss` into the first chain — an extremely common
+    /// real technique) used to be a complete no-op under relaxation. Root
+    /// cause: raw placement lays a chain out perfectly straight with no
+    /// idea a later stitch closes it, so the *raw* distance from the
+    /// chain's far end to the join point already equals the chain's own
+    /// straight-line length — the continuity spring meant to pull the
+    /// ring shut started out already "satisfied" by the straight shape,
+    /// so literally zero force ever acted (confirmed empirically: 150
+    /// relaxation steps moved nothing, not even slightly). Fixed by
+    /// giving a slip stitch's own continuity edge its real near-zero
+    /// slack instead of that raw distance.
+    ///
+    /// This only asserts the fix's actual, honest scope: the join spring
+    /// is no longer inert, so relaxation *does* pull the ends together.
+    /// It deliberately does NOT assert the scheme ends up a clean,
+    /// non-self-intersecting circle — it doesn't yet. Getting an actual
+    /// circular closure needs raw placement to recognise "this chain
+    /// closes into a ring" ahead of time and lay it out on a real arc
+    /// (parallel to how a magic ring's children get radial placement) —
+    /// scoped as follow-up work, not attempted here. See HANDOVER.md.
+    #[test]
+    fn slip_stitch_join_actually_pulls_the_chain_together() {
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        for _ in 0..6 {
+            thread.stitches.push(StitchInstance::new(CH, vec![]));
+        }
+        thread
+            .stitches
+            .push(StitchInstance::new(SS, vec![StitchRef::new(0, 0)]));
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let raw = place_scheme(&scheme, &registry).unwrap();
+        let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+
+        // Before the fix, every relaxed position was bit-for-bit
+        // identical to its raw position (a literal no-op). Now the far
+        // end of the chain (index 5) has been pulled substantially away
+        // from its raw position, back toward the join.
+        let raw_far_end = raw.threads[0][5].top;
+        let relaxed_far_end = relaxed.position(StitchRef::new(0, 5)).unwrap();
+        assert!(
+            raw_far_end.distance(&relaxed_far_end) > 1.0,
+            "expected the slip-stitch join to pull the chain's far end substantially \
+             toward the start; raw={:?} relaxed={:?}",
+            raw_far_end,
+            relaxed_far_end
+        );
+
+        // And the slip stitch itself should end up close to its target
+        // (chain 0) — a real near-zero-slack join, not floating far away.
+        let ss_pos = relaxed.position(StitchRef::new(0, 6)).unwrap();
+        let target_pos = relaxed.position(StitchRef::new(0, 0)).unwrap();
+        assert!(
+            ss_pos.distance(&target_pos) < 0.5,
+            "expected the slip stitch to land close to its target: ss={:?} target={:?}",
+            ss_pos,
+            target_pos
+        );
     }
 }

@@ -28,9 +28,10 @@ validation on the relaxed shape. `wasm/` bridges it to the browser via
 graph the UI builds. `web/` is a direct-manipulation editor: the app
 starts with a plain starting piece of yarn; pick a stitch-kind tool from
 the palette and click the render to place it (empty space works for
-chains; a target-requiring stitch is placed by clicking its target(s)
-directly, confirming a multi-target decrease by clicking the tool again —
-see `HANDOVER.md`'s M8 entry). The yarn renders live as real, thick,
+chains; a target-requiring stitch is placed by clicking its target
+directly — one click, placed immediately — or, with "Decrease mode"
+toggled on, by clicking several targets in turn and confirming with the
+tool button, to build a decrease). The yarn renders live as real, thick,
 per-stitch-shaped 3D tubes (not flat lines — see `HANDOVER.md`'s M7
 entry) with validation updating alongside it, and saving gives back an
 unguessable link to reload/share the scheme by — no accounts, see
@@ -40,7 +41,10 @@ round's several increases can still collide with a *neighbouring*
 increase — flagged, not yet fixed; decrease/multi-target stitches get no
 capacity/ring geometric treatment; chains don't yet visually read as
 linked ovals in the renderer; a pending-target highlight can be visually
-masked when a bridge segment happens to retrace a stitch's own path).
+masked when a bridge segment happens to retrace a stitch's own path;
+closing a chain into a ring with a slip stitch now actually pulls, but
+doesn't yet bow into a clean circle — see `HANDOVER.md`'s 2026-08-28
+entry for the real fix that's still needed).
 
 ## Run locally
 

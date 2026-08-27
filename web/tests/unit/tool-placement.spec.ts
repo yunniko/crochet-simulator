@@ -81,39 +81,66 @@ describe("selectTool", () => {
   });
 });
 
-describe("clickStitch", () => {
+describe("clickStitch, decrease mode off (the default)", () => {
   it("does nothing when no tool is active", () => {
-    const result = clickStitch(INITIAL_PLACEMENT_STATE, 2, 5);
+    const result = clickStitch(INITIAL_PLACEMENT_STATE, 2, 5, false);
     expect(result).toEqual({ state: INITIAL_PLACEMENT_STATE, place: null });
   });
 
   it("ch places immediately regardless of which stitch was clicked", () => {
     const state = { activeTool: "ch" as const, pendingTargets: [] };
-    const result = clickStitch(state, 3, 5);
+    const result = clickStitch(state, 3, 5, false);
     expect(result.place).toEqual({ kind: "ch", targets: [] });
     expect(result.state).toEqual(state);
   });
 
-  it("a target-requiring tool accumulates the clicked index into pendingTargets", () => {
+  it("a target-requiring tool places immediately with the single clicked target — no confirm click needed", () => {
     const state = { activeTool: "dc" as const, pendingTargets: [] };
-    const result = clickStitch(state, 2, 5);
+    const result = clickStitch(state, 2, 5, false);
+    expect(result.place).toEqual({ kind: "dc", targets: [2] });
+    // Tool stays active and pendingTargets stays empty — ready for
+    // another single-click placement right away.
+    expect(result.state).toEqual(state);
+  });
+
+  it("never accumulates pendingTargets, even across repeated clicks", () => {
+    let state: PlacementState = { activeTool: "dc", pendingTargets: [] };
+    const first = clickStitch(state, 3, 6, false);
+    expect(first.place).toEqual({ kind: "dc", targets: [3] });
+    state = first.state;
+    const second = clickStitch(state, 5, 6, false);
+    expect(second.place).toEqual({ kind: "dc", targets: [5] });
+    expect(second.state.pendingTargets).toEqual([]);
+  });
+});
+
+describe("clickStitch, decrease mode on", () => {
+  it("a target-requiring tool accumulates the clicked index into pendingTargets instead of placing", () => {
+    const state = { activeTool: "dc" as const, pendingTargets: [] };
+    const result = clickStitch(state, 2, 5, true);
     expect(result.place).toBeNull();
     expect(result.state).toEqual({ activeTool: "dc", pendingTargets: [2] });
   });
 
   it("clicking the same target again removes it (toggle), not a duplicate", () => {
     const state = { activeTool: "dc" as const, pendingTargets: [2, 4] };
-    const result = clickStitch(state, 2, 5);
+    const result = clickStitch(state, 2, 5, true);
     expect(result.place).toBeNull();
     expect(result.state).toEqual({ activeTool: "dc", pendingTargets: [4] });
   });
 
   it("multiple different clicks accumulate multiple pending targets, in click order", () => {
     let state: PlacementState = { activeTool: "dc", pendingTargets: [] };
-    state = clickStitch(state, 3, 6).state;
-    state = clickStitch(state, 5, 6).state;
-    state = clickStitch(state, 1, 6).state;
+    state = clickStitch(state, 3, 6, true).state;
+    state = clickStitch(state, 5, 6, true).state;
+    state = clickStitch(state, 1, 6, true).state;
     expect(state.pendingTargets).toEqual([3, 5, 1]);
+  });
+
+  it("ch still places immediately — decrease mode only affects target-requiring kinds", () => {
+    const state = { activeTool: "ch" as const, pendingTargets: [] };
+    const result = clickStitch(state, 3, 5, true);
+    expect(result.place).toEqual({ kind: "ch", targets: [] });
   });
 });
 
@@ -142,21 +169,30 @@ describe("clickEmptySpace", () => {
   });
 });
 
-describe("a full decrease-placement flow, end to end", () => {
+describe("a full decrease-placement flow, end to end (decrease mode on)", () => {
   it("select dc, click two targets, confirm by re-clicking dc — matches the Owner's chosen design", () => {
     let state = INITIAL_PLACEMENT_STATE;
     state = selectTool(state, "dc", 6).state;
-    state = clickStitch(state, 3, 6).state;
-    state = clickStitch(state, 5, 6).state;
+    state = clickStitch(state, 3, 6, true).state;
+    state = clickStitch(state, 5, 6, true).state;
     const confirm = selectTool(state, "dc", 6);
     expect(confirm.place).toEqual({ kind: "dc", targets: [3, 5] });
   });
 
-  it("a single-target placement is the same flow with one click before confirming", () => {
+  it("a single target still needs the confirm click while decrease mode is on", () => {
     let state = INITIAL_PLACEMENT_STATE;
     state = selectTool(state, "dc", 6).state;
-    state = clickStitch(state, 4, 6).state;
+    state = clickStitch(state, 4, 6, true).state;
     const confirm = selectTool(state, "dc", 6);
     expect(confirm.place).toEqual({ kind: "dc", targets: [4] });
+  });
+});
+
+describe("a full single-target placement flow, end to end (decrease mode off, the default)", () => {
+  it("select dc, click one target — placed immediately, no confirm click needed", () => {
+    let state = INITIAL_PLACEMENT_STATE;
+    state = selectTool(state, "dc", 6).state;
+    const result = clickStitch(state, 4, 6, false);
+    expect(result.place).toEqual({ kind: "dc", targets: [4] });
   });
 });

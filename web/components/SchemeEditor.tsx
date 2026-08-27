@@ -7,6 +7,8 @@ interface SchemeEditorProps {
   stitches: WireStitch[];
   placement: PlacementState;
   onSelectTool: (kind: StitchKind) => void;
+  decreaseMode: boolean;
+  onDecreaseMode: (value: boolean) => void;
   onRemoveLast: () => void;
   onClear: () => void;
   loopTarget: LoopTarget;
@@ -19,6 +21,8 @@ export default function SchemeEditor({
   stitches,
   placement,
   onSelectTool,
+  decreaseMode,
+  onDecreaseMode,
   onRemoveLast,
   onClear,
   loopTarget,
@@ -32,12 +36,25 @@ export default function SchemeEditor({
   return (
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-4 text-sm">
       <section>
-        <h2 className="mb-1 font-medium text-zinc-300">Stitch tool</h2>
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="font-medium text-zinc-300">Stitch tool</h2>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400" title="Off: a click on a target places it immediately. On: click each target in turn, then click the tool again to place a decrease.">
+            <input
+              type="checkbox"
+              checked={decreaseMode}
+              onChange={(e) => onDecreaseMode(e.target.checked)}
+              data-testid="decrease-mode-toggle"
+            />
+            Decrease mode
+          </label>
+        </div>
         <p className="mb-2 text-xs text-zinc-500">
           {stitches.length === 0
             ? "Pick chain or magic ring, then click the yarn to start."
             : activeNeedsTarget
-              ? "Click the stitch(es) to insert into on the render, then click this tool again to place it."
+              ? decreaseMode
+                ? "Click the stitch(es) to insert into on the render, then click this tool again to place it."
+                : "Click a stitch on the render to insert into it."
               : "Pick a tool, then click the render to place it."}
         </p>
         <div className="grid grid-cols-3 gap-1.5" data-testid="tool-palette">
@@ -71,7 +88,7 @@ export default function SchemeEditor({
             );
           })}
         </div>
-        {activeNeedsTarget && (
+        {activeNeedsTarget && decreaseMode && (
           <div data-testid="pending-targets" className="mt-2 text-xs text-sky-400">
             {pendingTargets.length === 0
               ? "No targets selected yet."

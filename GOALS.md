@@ -1,8 +1,10 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M8 done as of 2026-08-28 — pending Owner review/sign-off against the
-acceptance criteria below before moving to Completed.**
+**M1-M8 done. Two Owner-reported fixes on top of M8 landed 2026-08-28
+(decrease-mode toggle; a real, only-partially-fixed ring-closure bug) —
+see progress log. Pending Owner review/sign-off against the acceptance
+criteria below before moving to Completed.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -116,6 +118,31 @@ sign-off before M1 starts):
       tools and clicking the render, with no form fields involved.
 
 **Progress log** (newest first):
+- 2026-08-28 — Two Owner-reported issues on top of M8, fixed same day.
+  (1) **Decrease mode is now an explicit toggle, not the default** —
+  every target-requiring placement used to require select-target-then-
+  confirm even for the common single-target case; a checkbox now controls
+  it, off by default (single click places immediately). (2) **A real bug,
+  found and only partially fixed**: joining a chain into a ring with a
+  slip stitch ("ch 6, ss into the first chain") stayed straight and
+  showed intersections instead of closing into a circle. Root cause,
+  confirmed with a real Rust test: `ss`'s continuity spring's rest length
+  came from raw (pre-relaxation) straight-line placement distance, which
+  for a ring-closing join already exactly matches the chain's own
+  straight length — so literally zero force ever acted; 150 relaxation
+  steps moved nothing at all. Fixed the zero-force bug (`ss` now uses a
+  real near-zero-slack rest length, scoped to `ss` only) — confirmed the
+  chain's far end now actually gets pulled toward the join. **Did not**
+  achieve a clean circular closure: the relaxation solver is a plain
+  mass-spring system (no bending/curvature stiffness — confirmed to the
+  Owner directly this isn't a rope/rod simulation), so a real pulling
+  force on a perfectly straight, symmetric line just folds it onto itself
+  rather than bowing it into a circle. Tried and deliberately reverted a
+  small-wobble seed (made things move differently but crumple worse, not
+  better). An actual fix needs raw placement to recognise ring-closing
+  chains ahead of time and lay them out on a real arc — flagged as
+  candidate follow-up work, not attempted further. Full account,
+  including the honest "what doesn't work yet," in `HANDOVER.md`.
 - 2026-08-28 — **M8 done — direct-manipulation editor.** Owner gave
   detailed new direction instead of signing off on M1-M7: replace the
   dropdown/checkbox form with a tool palette (one button per stitch

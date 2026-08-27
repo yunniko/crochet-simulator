@@ -886,6 +886,78 @@ See GOALS.md for the full milestone list and what's still open
 local-density and decrease/multi-target-stitch geometric limitations, the
 chain-visual-shape and bridge-overlap-highlighting limitations above).
 
+**Decrease mode made an explicit toggle, not the default (2026-08-28,
+Owner-directed).** Owner: every M8 target-requiring placement required a
+select-target-then-confirm two-click flow, even for the overwhelmingly
+common single-target case — "the decrease should be a mode, not default,
+it adds not needed clicks." Fixed: `lib/tool-placement.ts`'s `clickStitch`
+takes a new `decreaseMode: boolean` — off (the default), a single click on
+a target places the stitch immediately, no confirm click; on, clicks
+accumulate into a pending set exactly as M8 originally built, confirmed by
+re-clicking the active tool. `SchemeEditor.tsx` gained a "Decrease mode"
+checkbox next to the palette; switching it off mid-selection abandons any
+in-progress pending targets (same reasoning as switching tools). 4 new/
+updated Vitest cases plus a rewritten e2e test cover both modes.
+
+**A real, only-partially-fixed bug: joining a chain into a ring with a
+slip stitch (2026-08-28, Owner-reported).** Owner: "I am building 6 chains
+and then applying a slip stitch to the first one. It should form a circle
+but it keeps straight and just shows intersections." Reproduced and
+diagnosed with a real Rust test before touching any code (see
+`relax.rs`'s `slip_stitch_join_actually_pulls_the_chain_together` for the
+regression test that came out of this):
+
+- **Root cause, confirmed with real numbers**: relaxation moved *nothing
+  at all* — every relaxed position was bit-for-bit identical to its raw
+  position, for all 150 steps. `ss`'s continuity spring (to its working-
+  order predecessor, the last chain) and its insertion spring (to its
+  target, the first chain) both use rest lengths derived from *raw*
+  placement — and raw placement lays a chain out on one straight line
+  with no idea a later stitch will close it into a ring, so the raw
+  distance from the chain's far end to the join point already exactly
+  equals the chain's own straight-line length. The very spring meant to
+  pull the ring shut started out already "satisfied" by the straight
+  shape — a real zero-force equilibrium, not a slow-to-converge one.
+- **Fixed**: `ss`'s continuity edge now uses a small near-zero
+  `SLIP_STITCH_CONTINUITY_SLACK` (0.05) instead of raw distance — a real,
+  independently-correct physical fact (a slip stitch is a genuine
+  near-zero-slack join in real crochet, the loop pulled straight through
+  with no extra yarn used), scoped to `ss` specifically so ordinary dc/tr/
+  htr row continuity (already tuned and validated across M2-M7) is
+  untouched. Confirmed this actually engages: the chain's far end now
+  moves substantially (>1 unit) toward the join instead of sitting inert.
+- **Not fixed — reported honestly rather than papered over**: the chain
+  still starts out perfectly *collinear* (raw placement's `ch` layout is
+  one straight line — `geometry.rs`'s `lays_out_as_line`), and this
+  project's relaxation solver is a plain mass-spring point system with no
+  bending/curvature term (confirmed for the Owner directly when asked what
+  "rope simulation algorithm" this uses — it isn't one; no Cosserat rod,
+  no bending stiffness, just Hookean springs + semi-implicit Euler). A
+  spring system with only pairwise distance constraints has no preference
+  for a curved shape over a straight one holding the same distances, so
+  the now-real pulling force folds the chain back onto itself rather than
+  bowing it into a clean, non-self-intersecting circle — confirmed both
+  in a Rust diagnostic and manually in the browser (7 stitches, 3
+  violations, visibly crumpled, not circular). **Tried and deliberately
+  reverted**: a small deterministic sideways wobble seeded into `ch`'s raw
+  placement, meant to break the exact collinear symmetry so the pulling
+  force would have something to curl around. It made real numbers move
+  differently but produced an unpredictable crumple, not a cleaner
+  result — genuinely worse than the honest straight-line failure mode, so
+  reverted rather than shipped as a "kind of works" fix (per VALUES.md:
+  report outcomes as they are, don't smooth over an incomplete result to
+  look like success).
+- **What an actual fix needs**: raw placement recognising ahead of time
+  that a chain run closes into a ring (a stitch later in the same thread
+  targets an earlier zero-target stitch) and laying that run out on a real
+  arc instead of a line — architecturally parallel to how a magic ring's
+  *children* already get radial placement (§5a), just for a *chain that
+  closes on itself* instead of a shared-target fan. This needs real
+  lookahead in `geometry.rs`'s single forward-pass placement (it doesn't
+  currently know about stitches later in the same thread when placing an
+  earlier one) — scoped, real work, not attempted further this session.
+  Flagged to the Owner as a candidate for its own milestone.
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**

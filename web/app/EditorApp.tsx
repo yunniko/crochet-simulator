@@ -36,6 +36,11 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
   // available as alternate starting points via the header buttons.
   const [stitches, setStitches] = useState<WireStitch[]>(initialStitches ?? []);
   const [placement, setPlacement] = useState<PlacementState>(INITIAL_PLACEMENT_STATE);
+  // Off by default: a single click on a target immediately places the
+  // stitch (the common case). Decrease mode is an explicit opt-in — click
+  // each target in turn, click the active tool again to confirm — so it
+  // doesn't add an extra confirm click to every ordinary placement.
+  const [decreaseMode, setDecreaseMode] = useState(false);
   const [loopTarget, setLoopTarget] = useState<LoopTarget>("Both");
   const [capacityOverride, setCapacityOverride] = useState<CapacityStyle | "">("");
   // `slug` tracks the *currently saved* link, if any — cleared implicitly
@@ -107,6 +112,15 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
             stitches={stitches}
             placement={placement}
             onSelectTool={(kind: StitchKind) => applyPlacementResult(selectTool(placement, kind, stitches.length))}
+            decreaseMode={decreaseMode}
+            onDecreaseMode={(value: boolean) => {
+              setDecreaseMode(value);
+              // Turning it off mid-selection abandons any in-progress
+              // multi-target pick — same reasoning as switching tools:
+              // it isn't meaningful once single-click-to-place is back,
+              // and the highlight disappearing makes that visible.
+              setPlacement((p) => ({ ...p, pendingTargets: [] }));
+            }}
             onRemoveLast={() => {
               setStitches((prev) => prev.slice(0, -1));
               // The removed stitch's index may no longer exist — drop any
@@ -128,7 +142,9 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
         <ComputePane
           stitches={stitches}
           placement={placement}
-          onStitchClick={(index: number) => applyPlacementResult(clickStitch(placement, index, stitches.length))}
+          onStitchClick={(index: number) =>
+            applyPlacementResult(clickStitch(placement, index, stitches.length, decreaseMode))
+          }
           onEmptySpaceClick={() => applyPlacementResult(clickEmptySpace(placement, stitches.length))}
         />
       </div>
