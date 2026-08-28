@@ -10,22 +10,33 @@
 
 import type { StitchKind } from "@/lib/stitch-kinds";
 
-// `ch` never has a target (it's formed purely from the working loop) and
-// `mr` never has a target either (a single loop of yarn, not an
-// insertion) — see docs/crochet-context.md §3/§4. Every other kind needs
-// at least one.
+// `ch`/`start_ch` never have a target (formed purely from the working
+// loop — `start_ch` is a physical clone of `ch`, see core's own doc
+// comment on it) and `mr` never has a target either (a single loop of
+// yarn, not an insertion) — see docs/crochet-context.md §3/§4. Every
+// other kind needs at least one.
 export function stitchRequiresTarget(kind: StitchKind): boolean {
-  return kind !== "ch" && kind !== "mr";
+  return kind !== "ch" && kind !== "mr" && kind !== "start_ch";
 }
 
-// `mr` can only start a thread (docs §5a: a magic ring is a foundation
-// anchor); every target-requiring kind needs an existing stitch to target,
-// so it's unavailable until the foundation exists; `ch` never needs a
-// target, so it's always available.
-export function isToolAvailable(kind: StitchKind, stitchCount: number): boolean {
-  if (kind === "mr") return stitchCount === 0;
-  if (kind === "ch") return true;
-  return stitchCount > 0;
+// `mr` and `start_ch` can only start a thread — a magic ring is a
+// foundation anchor (docs §5a), and `start_ch` is the chain-opening
+// equivalent: the very first stitch, when the Owner opens with a chain
+// rather than a magic ring. Unlike an ordinary `ch`, a lone `start_ch`
+// isn't yet a real loop anything else can be worked into — post stitches
+// stay locked out until an actual `ch` also exists (placed by extending
+// the starting chain), at which point every kind unlocks in one step,
+// same as the ordinary "at least one stitch exists" rule below. `ch`
+// itself is no longer available at the very start (that's `start_ch`'s
+// role now) but is otherwise always available once the foundation exists.
+export function isToolAvailable(kind: StitchKind, placedKinds: readonly StitchKind[]): boolean {
+  const count = placedKinds.length;
+  if (kind === "mr") return count === 0;
+  if (kind === "start_ch") return count === 0;
+  if (kind === "ch") return count > 0;
+  if (count === 0) return false;
+  if (count === 1 && placedKinds[0] === "start_ch") return false;
+  return true;
 }
 
 export interface PlacementState {
@@ -64,8 +75,8 @@ function unchanged(state: PlacementState): PlacementResult {
  * in between just turns the tool off, rather than placing an invalid
  * zero-target stitch).
  */
-export function selectTool(state: PlacementState, kind: StitchKind, stitchCount: number): PlacementResult {
-  if (!isToolAvailable(kind, stitchCount)) return unchanged(state);
+export function selectTool(state: PlacementState, kind: StitchKind, placedKinds: readonly StitchKind[]): PlacementResult {
+  if (!isToolAvailable(kind, placedKinds)) return unchanged(state);
 
   if (state.activeTool === kind) {
     if (stitchRequiresTarget(kind) && state.pendingTargets.length > 0) {
@@ -101,15 +112,15 @@ export function selectTool(state: PlacementState, kind: StitchKind, stitchCount:
 export function clickStitch(
   state: PlacementState,
   index: number,
-  stitchCount: number,
+  placedKinds: readonly StitchKind[],
   decreaseMode: boolean,
 ): PlacementResult {
   const tool = state.activeTool;
-  if (!tool || !isToolAvailable(tool, stitchCount)) return unchanged(state);
+  if (!tool || !isToolAvailable(tool, placedKinds)) return unchanged(state);
 
   if (!stitchRequiresTarget(tool)) {
-    // ch/mr ignore *what* was clicked — any click places one, per the
-    // model (they never have a target either way).
+    // ch/mr/start_ch ignore *what* was clicked — any click places one,
+    // per the model (they never have a target either way).
     return { state, place: { kind: tool, targets: [] } };
   }
 
@@ -127,9 +138,9 @@ export function clickStitch(
 }
 
 /** Clicking empty space on the render (`Canvas`'s `onPointerMissed`). */
-export function clickEmptySpace(state: PlacementState, stitchCount: number): PlacementResult {
+export function clickEmptySpace(state: PlacementState, placedKinds: readonly StitchKind[]): PlacementResult {
   const tool = state.activeTool;
-  if (!tool || !isToolAvailable(tool, stitchCount)) return unchanged(state);
+  if (!tool || !isToolAvailable(tool, placedKinds)) return unchanged(state);
   if (stitchRequiresTarget(tool)) {
     // Target-requiring kinds can only be placed by clicking their target
     // directly — an empty-space click has nothing to attach them to.

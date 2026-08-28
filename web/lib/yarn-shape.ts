@@ -28,12 +28,17 @@ export const YARN_RADIUS = YARN_DIAMETER / 2;
 // model's own height ordering (stitch.rs: dc < htr < tr < dtr < trtr <
 // quad_tr) so a taller stitch also reads as visually "busier," but the
 // exact numbers are a stylistic choice, not derived from `pre_wraps`.
-// ch/ss/mr get 0: all three are zero-height point anchors in the physics
-// model (base === top), so there's no post to wiggle at all — their
-// visual character comes from the connecting bridge segments around them,
-// which this module leaves as plain smooth curve, not a special shape.
+// ch/start_ch/ss/mr get 0: `height() === 0` in the physics model for all
+// four, so there's no post to wiggle at all — their visual character
+// comes from the connecting bridge segments around them, which this
+// module leaves as plain smooth curve, not a special shape. `start_ch` is
+// `ch`'s registry-level physical clone (core's own doc comment), so it
+// gets the identical treatment; height 0 isn't the same as zero extent
+// (see the "collapse to a point" note in buildStitchCurvePoints below) —
+// ch/start_ch still have a real base-to-top span, only ss/mr collapse.
 const STITCH_WRAP_COUNTS: Record<StitchKind, number> = {
   ch: 0,
+  start_ch: 0,
   ss: 0,
   mr: 0,
   dc: 1,

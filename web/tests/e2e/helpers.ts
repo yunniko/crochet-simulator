@@ -67,16 +67,34 @@ export async function clickUntil(page: Page, isDone: () => Promise<boolean>, max
 /** Places `count` chains via the tool palette + render clicks — the M8
  * equivalent of the old "Add stitch" button, for tests that just need a
  * small deterministic scheme and aren't themselves testing placement
- * mechanics. Only selects the `ch` tool if it isn't already active —
- * clicking an *already*-active tool with nothing pending toggles it off
- * (see lib/tool-placement.ts's `selectTool`), so calling this more than
- * once in the same test must not blindly re-click it. */
+ * mechanics. `ch` is no longer available as the very first stitch of an
+ * empty scheme (`start_ch` is — see lib/tool-placement.ts), so this opens
+ * with `start_ch` when the scheme is still empty, then switches to
+ * ordinary `ch` for the rest, same visible result (`count` chain-shaped
+ * links) as before that change. Only selects a tool if it isn't already
+ * active — clicking an *already*-active tool with nothing pending toggles
+ * it off (see lib/tool-placement.ts's `selectTool`), so calling this more
+ * than once in the same test must not blindly re-click it. */
 export async function placeChains(page: Page, count: number) {
+  if (count === 0) return;
   const chTool = page.getByTestId("tool-ch");
-  if ((await chTool.getAttribute("aria-pressed")) !== "true") {
-    await chTool.click();
-  }
-  for (let i = 0; i < count; i++) {
+  let remaining = count;
+
+  if (await chTool.isDisabled()) {
+    const startChTool = page.getByTestId("tool-start_ch");
+    if ((await startChTool.getAttribute("aria-pressed")) !== "true") {
+      await startChTool.click();
+    }
     await clickNearOrigin(page);
+    remaining--;
+  }
+
+  if (remaining > 0) {
+    if ((await chTool.getAttribute("aria-pressed")) !== "true") {
+      await chTool.click();
+    }
+    for (let i = 0; i < remaining; i++) {
+      await clickNearOrigin(page);
+    }
   }
 }

@@ -50,7 +50,7 @@ export default function SchemeEditor({
         </div>
         <p className="mb-2 text-xs text-zinc-500">
           {stitches.length === 0
-            ? "Pick chain or magic ring, then click the yarn to start."
+            ? "Pick starting chain or magic ring, then click the yarn to start."
             : activeNeedsTarget
               ? decreaseMode
                 ? "Click the stitch(es) to insert into on the render, then click this tool again to place it."
@@ -59,7 +59,10 @@ export default function SchemeEditor({
         </p>
         <div className="grid grid-cols-3 gap-1.5" data-testid="tool-palette">
           {STITCH_KINDS.map((kind) => {
-            const available = isToolAvailable(kind, stitches.length);
+            const available = isToolAvailable(
+              kind,
+              stitches.map((s) => s.kind),
+            );
             const isActive = activeTool === kind;
             return (
               <button
@@ -71,9 +74,11 @@ export default function SchemeEditor({
                 title={
                   kind === "mr"
                     ? "Magic ring — only available as the very first stitch"
-                    : kind === "ch"
-                      ? "Chain — never needs a target"
-                      : `${kind} — needs at least one existing stitch as a target`
+                    : kind === "start_ch"
+                      ? "Starting chain — only available as the very first stitch; post stitches unlock once a real chain also exists"
+                      : kind === "ch"
+                        ? "Chain — never needs a target"
+                        : `${kind} — needs at least one existing stitch as a target`
                 }
                 className={`rounded px-2 py-2 text-xs font-medium uppercase transition-colors ${
                   isActive

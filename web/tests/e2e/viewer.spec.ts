@@ -13,14 +13,16 @@ import { clickEmptyCorner, clickNearOrigin, clickUntil } from "./helpers";
 // pixels (see ./helpers.ts), so it survives a differently-sized test
 // viewport.
 
-test("starts empty, with only ch and mr available", async ({ page }) => {
+test("starts empty, with only start_ch and mr available", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (0)");
   await expect(page.locator("canvas")).toBeVisible();
-  await expect(page.getByTestId("tool-ch")).toBeEnabled();
+  await expect(page.getByTestId("tool-start_ch")).toBeEnabled();
   await expect(page.getByTestId("tool-mr")).toBeEnabled();
-  for (const kind of ["ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr"]) {
+  // ch itself is no longer available as the very first stitch — start_ch
+  // is (see lib/tool-placement.ts).
+  for (const kind of ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr"]) {
     await expect(page.getByTestId(`tool-${kind}`)).toBeDisabled();
   }
 });
@@ -81,20 +83,27 @@ test("remove last undoes the most recent stitch", async ({ page }) => {
 test("building a scheme by selecting tools and clicking the render, start to finish", async ({ page }) => {
   await page.goto("/");
 
-  // ch ignores what it hits — any click on the canvas places one (see
-  // clickNearOrigin's own comment) — this is what actually exercises the
-  // "click the yarn to place a foundation stitch" flow, not just a
+  // start_ch ignores what it hits — any click on the canvas places one
+  // (see clickNearOrigin's own comment) — this is what actually exercises
+  // the "click the yarn to place a foundation stitch" flow, not just a
   // stand-in for it.
-  await page.getByTestId("tool-ch").click();
+  await page.getByTestId("tool-start_ch").click();
   await clickNearOrigin(page);
   await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (1)");
-  await expect(page.getByTestId("stitch-0")).toContainText("ch");
+  await expect(page.getByTestId("stitch-0")).toContainText("start_ch");
 
-  // mr becomes unavailable the moment a stitch exists.
+  // mr and start_ch both become unavailable the moment a stitch exists;
+  // post stitches stay locked too — a lone start_ch isn't a real chain
+  // yet (see lib/tool-placement.ts).
   await expect(page.getByTestId("tool-mr")).toBeDisabled();
+  await expect(page.getByTestId("tool-start_ch")).toBeDisabled();
+  await expect(page.getByTestId("tool-dc")).toBeDisabled();
 
-  // ch also places via a genuinely empty-space click (Canvas's
-  // onPointerMissed), not just a hit on existing geometry.
+  // Placing start_ch deselects itself (it's no longer available), so the
+  // next placement needs its own tool selection — ch places via a
+  // genuinely empty-space click (Canvas's onPointerMissed), not just a
+  // hit on existing geometry.
+  await page.getByTestId("tool-ch").click();
   await clickEmptyCorner(page);
   await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
 
@@ -116,19 +125,32 @@ test("decrease mode: a target click stays pending until confirmed, instead of pl
   page,
 }) => {
   await page.goto("/");
+  // start_ch, then a real ch (not mr): a lone mr's rendered geometry
+  // turned out too small/point-like for clickUntil's sparse grid search
+  // to reliably land on (confirmed: consistently missed within its
+  // attempt budget), unlike a chain's real line-segment span — start_ch
+  // needs a second, real ch before dc unlocks (see lib/tool-placement.ts),
+  // so this ends up with two clickable stitches rather than one, but both
+  // render the same easy-to-hit chain shape.
+  await page.getByTestId("tool-start_ch").click();
+  await clickNearOrigin(page);
   await page.getByTestId("tool-ch").click();
-  await clickNearOrigin(page); // one stitch to target — the only clickable geometry, so any hit must be it
+  await clickEmptyCorner(page);
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
 
   await page.getByTestId("decrease-mode-toggle").check();
   await page.getByTestId("tool-dc").click();
   await expect(page.getByTestId("pending-targets")).toHaveText("No targets selected yet.");
 
   await clickUntil(page, async () => (await page.getByTestId("pending-targets").textContent())?.includes("click \"dc\" again to place") ?? false);
-  // Still just the one chain — decrease mode holds the click as pending
-  // rather than placing immediately.
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (1)");
+  // Still just the two foundation stitches — decrease mode holds the
+  // click as pending rather than placing immediately.
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
 
   await page.getByTestId("tool-dc").click();
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (2)");
-  await expect(page.getByTestId("stitch-1")).toContainText("dc -> [0]");
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (3)");
+  // Whichever of the two foundation stitches the grid search happened to
+  // land on (0 = start_ch, 1 = ch) — the point is that a real target got
+  // recorded, not which specific index.
+  await expect(page.getByTestId("stitch-2")).toContainText(/dc -> \[[01]\]/);
 });

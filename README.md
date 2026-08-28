@@ -14,37 +14,42 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-All 8 planned milestones (M1–M8) done. **Live at
+M1–M9 done (of a 12-milestone plan — M10-M12 add collision-preventing
+contact on top of M9's real rope physics). **Live at
 https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
 siblings and correctly flags ~11+; a tightened magic ring reads as pointy
 at 3-5, flat at 6-8, wavy at 9+; front/back loop targeting is
-geometrically real, supporting techniques like mosaic crochet), a mass-
-spring relaxation solve (stitch topology, not a separate material
-property, determines stretchiness), and self-intersection / stitch-count
-validation on the relaxed shape. `wasm/` bridges it to the browser via
-`wasm-bindgen`, exposing one general `compute_scheme` call for whatever
-graph the UI builds. `web/` is a direct-manipulation editor: the app
-starts with a plain starting piece of yarn; pick a stitch-kind tool from
-the palette and click the render to place it (empty space works for
-chains; a target-requiring stitch is placed by clicking its target
-directly — one click, placed immediately — or, with "Decrease mode"
-toggled on, by clicking several targets in turn and confirming with the
-tool button, to build a decrease). The yarn renders live as real, thick,
-per-stitch-shaped 3D tubes (not flat lines — see `HANDOVER.md`'s M7
-entry) with validation updating alongside it, and saving gives back an
-unguessable link to reload/share the scheme by — no accounts, see
-`HANDOVER.md`'s M6 access-model decision. See `GOALS.md` → G-001 for the
-milestone plan and progress log, and known/deferred limitations (a dense
-round's several increases can still collide with a *neighbouring*
-increase — flagged, not yet fixed; decrease/multi-target stitches get no
-capacity/ring geometric treatment; chains don't yet visually read as
-linked ovals in the renderer; a pending-target highlight can be visually
-masked when a bridge segment happens to retrace a stitch's own path;
-closing a chain into a ring with a slip stitch now actually pulls, but
-doesn't yet bow into a clean circle — see `HANDOVER.md`'s 2026-08-28
-entry for the real fix that's still needed).
+geometrically real, supporting techniques like mosaic crochet), a
+relaxation solve combining Hookean springs (stitch topology, not a
+separate material property, determines stretchiness) with a genuine
+Discrete Elastic Rod bending term (M9 — a chain closed into a ring with a
+slip stitch actually bows into a closed loop, not just a straight pull),
+and self-intersection / stitch-count validation on the relaxed shape.
+`wasm/` bridges it to the browser via `wasm-bindgen`, exposing one
+general `compute_scheme` call for whatever graph the UI builds. `web/` is
+a direct-manipulation editor: the app starts with a plain starting piece
+of yarn; pick a stitch-kind tool from the palette and click the render to
+place it (a starting chain or magic ring opens a scheme; empty space also
+works for ordinary chains; a target-requiring stitch is placed by
+clicking its target directly — one click, placed immediately — or, with
+"Decrease mode" toggled on, by clicking several targets in turn and
+confirming with the tool button, to build a decrease). The yarn renders
+live as real, thick, per-stitch-shaped 3D tubes (not flat lines — see
+`HANDOVER.md`'s M7 entry) with validation updating alongside it, and
+saving gives back an unguessable link to reload/share the scheme by — no
+accounts, see `HANDOVER.md`'s M6 access-model decision. See `GOALS.md` →
+G-001 for the milestone plan and progress log, and known/deferred
+limitations (a dense round's several increases can still collide with a
+*neighbouring* increase — flagged, not yet fixed; decrease/multi-target
+stitches get no capacity/ring geometric treatment; chains don't yet
+visually read as linked ovals in the renderer; a pending-target highlight
+can be visually masked when a bridge segment happens to retrace a
+stitch's own path; M9's DER bending covers stretch+bend only, not twist —
+deliberately deferred, see `HANDOVER.md`'s M9 entry; collision-preventing
+contact (M10-M12) is still ahead — self-intersections are flagged after
+the fact, not yet prevented during relaxation).
 
 ## Run locally
 
@@ -88,8 +93,8 @@ already rebuilt/committed — see above):
 docker compose --profile app up -d --build   # db + migrate + app, http://127.0.0.1:30020
 ```
 
-Pick a tool and click the render to build a scheme from scratch, or start
-from one of four presets (flat circle, overloaded ring, shell, freeform
-spike); Save gives back an unguessable `/s/<slug>` link that reloads (or
-re-saves over) that exact scheme — no accounts, see `HANDOVER.md`'s M6
-access-model decision.
+Pick a starting-chain or magic-ring tool and click the render to build a
+scheme from scratch, or start from one of four presets (flat circle,
+overloaded ring, shell, freeform spike); Save gives back an unguessable
+`/s/<slug>` link that reloads (or re-saves over) that exact scheme — no
+accounts, see `HANDOVER.md`'s M6 access-model decision.

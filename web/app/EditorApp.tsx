@@ -75,7 +75,14 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
     // the updater's purity contract).
     const nextStitches = [...stitches, newStitch];
     setStitches(nextStitches);
-    setPlacement(isToolAvailable(result.state.activeTool!, nextStitches.length) ? result.state : INITIAL_PLACEMENT_STATE);
+    setPlacement(
+      isToolAvailable(
+        result.state.activeTool!,
+        nextStitches.map((s) => s.kind),
+      )
+        ? result.state
+        : INITIAL_PLACEMENT_STATE,
+    );
   };
 
   const loadScheme = (newStitches: WireStitch[]) => {
@@ -111,7 +118,15 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
           <SchemeEditor
             stitches={stitches}
             placement={placement}
-            onSelectTool={(kind: StitchKind) => applyPlacementResult(selectTool(placement, kind, stitches.length))}
+            onSelectTool={(kind: StitchKind) =>
+              applyPlacementResult(
+                selectTool(
+                  placement,
+                  kind,
+                  stitches.map((s) => s.kind),
+                ),
+              )
+            }
             decreaseMode={decreaseMode}
             onDecreaseMode={(value: boolean) => {
               setDecreaseMode(value);
@@ -143,9 +158,23 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
           stitches={stitches}
           placement={placement}
           onStitchClick={(index: number) =>
-            applyPlacementResult(clickStitch(placement, index, stitches.length, decreaseMode))
+            applyPlacementResult(
+              clickStitch(
+                placement,
+                index,
+                stitches.map((s) => s.kind),
+                decreaseMode,
+              ),
+            )
           }
-          onEmptySpaceClick={() => applyPlacementResult(clickEmptySpace(placement, stitches.length))}
+          onEmptySpaceClick={() =>
+            applyPlacementResult(
+              clickEmptySpace(
+                placement,
+                stitches.map((s) => s.kind),
+              ),
+            )
+          }
         />
       </div>
     </div>

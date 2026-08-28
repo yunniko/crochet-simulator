@@ -6,9 +6,20 @@
 // WireStitch/WireScheme by hand — no shared codegen for these yet, see
 // web/AGENTS.md.
 
-export type StitchKind = "ch" | "ss" | "dc" | "htr" | "tr" | "dtr" | "trtr" | "quad_tr" | "mr";
+export type StitchKind = "ch" | "ss" | "dc" | "htr" | "tr" | "dtr" | "trtr" | "quad_tr" | "mr" | "start_ch";
 
-export const STITCH_KINDS: StitchKind[] = ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr", "mr"];
+export const STITCH_KINDS: StitchKind[] = [
+  "start_ch",
+  "ch",
+  "ss",
+  "dc",
+  "htr",
+  "tr",
+  "dtr",
+  "trtr",
+  "quad_tr",
+  "mr",
+];
 
 export type LoopTarget = "Both" | "FrontOnly" | "BackOnly" | "FrontPost" | "BackPost";
 

@@ -20,7 +20,7 @@ use crochet_core::graph::{LoopTarget, Scheme, StitchInstance, StitchRef, Thread}
 use crochet_core::path::{relaxed_yarn_segments, SegmentOwner};
 use crochet_core::relax::{relax_scheme, RelaxationParams};
 use crochet_core::stitch::{
-    CapacityStyle, StitchId, StitchRegistry, CH, DC, DTR, HTR, MR, QUAD_TR, SS, TR, TRTR,
+    CapacityStyle, StitchId, StitchRegistry, CH, DC, DTR, HTR, MR, QUAD_TR, SS, START_CH, TR, TRTR,
 };
 use crochet_core::validate::{check_self_intersections, DEFAULT_YARN_DIAMETER};
 use crochet_core::vec3::Vec3;
@@ -93,6 +93,7 @@ fn parse_kind(s: &str) -> Result<StitchId, String> {
         "trtr" => Ok(TRTR),
         "quad_tr" => Ok(QUAD_TR),
         "mr" => Ok(MR),
+        "start_ch" => Ok(START_CH),
         other => Err(format!("unknown stitch kind: \"{other}\"")),
     }
 }

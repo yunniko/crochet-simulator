@@ -32,6 +32,19 @@ pub const QUAD_TR: StitchId = StitchId("quad_tr");
 /// own capacity behaviour as a *target* (see `CapacityStyle`), which `ch`
 /// does not share.
 pub const MR: StitchId = StitchId("mr");
+/// Starting chain (M9-era UI addition): the very first stitch of a
+/// scheme, when the Owner opens with a chain rather than a magic ring.
+/// Physically and geometrically identical to `ch` in every respect —
+/// zero targets, zero height, lays out as a line — it exists as its own
+/// registered kind purely so the editor can tell "the foundation-only
+/// opening stitch" apart from an ordinary mid-scheme `ch` for tool-
+/// availability purposes (only usable with zero stitches placed, like
+/// `mr`, and its own presence alone doesn't yet unlock post stitches the
+/// way an ordinary `ch` does — see `web/lib/tool-placement.ts`). None of
+/// that distinction matters to placement/relaxation/validation, which is
+/// exactly why it's a plain clone of `ch`'s definition below rather than
+/// a new physical concept.
+pub const START_CH: StitchId = StitchId("start_ch");
 
 /// How a stitch behaves as an insertion **target** when several stitches
 /// share it — see docs/crochet-context.md §5a. This is about the target's
@@ -183,6 +196,14 @@ impl StitchRegistry {
         let mut reg = Self::empty();
         reg.register(StitchDef {
             id: CH,
+            pre_wraps: 0,
+            has_insertion: false,
+            draw_through: DrawThrough::Single,
+            capacity_style: CapacityStyle::Elastic,
+            lays_out_as_line: true,
+        });
+        reg.register(StitchDef {
+            id: START_CH,
             pre_wraps: 0,
             has_insertion: false,
             draw_through: DrawThrough::Single,
@@ -373,5 +394,20 @@ mod tests {
     fn ch_is_elastic() {
         let reg = StitchRegistry::with_uk_basics();
         assert_eq!(reg.get(CH).unwrap().capacity_style, CapacityStyle::Elastic);
+    }
+
+    #[test]
+    fn start_ch_is_a_physical_clone_of_ch() {
+        // See START_CH's own doc comment: it's registered separately only
+        // for the editor's tool-availability rules to key off of — every
+        // placement/geometry-relevant property must match `ch` exactly.
+        let reg = StitchRegistry::with_uk_basics();
+        let ch = reg.get(CH).unwrap();
+        let start_ch = reg.get(START_CH).unwrap();
+        assert_eq!(start_ch.has_insertion, ch.has_insertion);
+        assert_eq!(start_ch.height(), ch.height());
+        assert_eq!(start_ch.capacity_style, ch.capacity_style);
+        assert_eq!(start_ch.lays_out_as_line, ch.lays_out_as_line);
+        assert_eq!(start_ch.insertion_stiffness(), ch.insertion_stiffness());
     }
 }
