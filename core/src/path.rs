@@ -67,7 +67,27 @@ pub fn relaxed_yarn_segments(
                 .expect("relaxed position missing for a stitch from the same scheme");
 
             let relaxed_base = match stitch.targets.as_slice() {
-                [] => prev.map(|(_, top, _)| top).unwrap_or(Vec3::ZERO),
+                // A thread's very first stitch has no `prev` and no
+                // target — its "base" is the free tail end of the working
+                // yarn before any stitch exists, nothing else in the
+                // model anchors it. It used to default to a hardcoded
+                // world-origin `Vec3::ZERO`, harmless while raw and
+                // relaxed placement stay close together (an open chain
+                // never moves far from where it started) but wrong once
+                // they diverge substantially (M9: a chain pulled into a
+                // closed ring by a slip stitch relaxes into a shape
+                // nowhere near the origin it started at raw-placement
+                // time) — the fixed origin became a phantom anchor point
+                // the rest of the (correctly relaxed) ring would cross
+                // right through, since nothing was actually there.
+                // Fixed: track the same rigid offset from raw that the
+                // stitch's own top ended up with, so the tail moves
+                // together with the stitch it belongs to instead of
+                // staying nailed to a point in space that has no
+                // physical meaning once the piece has actually moved.
+                [] => prev
+                    .map(|(_, top, _)| top)
+                    .unwrap_or_else(|| raw_stitch.base + (relaxed_top - raw_stitch.top)),
                 [single] => {
                     let raw_target_top = raw.threads[single.thread][single.index].top;
                     let relaxed_target_top = relaxed

@@ -1,11 +1,14 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M8 done. M9-M12 added 2026-08-28: a proper rope-physics rewrite
-(Discrete Elastic Rods + collision-preventing contact) — the ring-closure
-bug traced back to the relaxation solver never having real bending
+**M1-M9 done. M10-M12 remain: a proper rope-physics rewrite (Discrete
+Elastic Rods + collision-preventing contact) — the ring-closure bug
+traced back to the relaxation solver never having real bending
 resistance, and the Owner clarified this was the actually-agreed MVP
-scope, not a nice-to-have. In progress.**
+scope, not a nice-to-have. M9 (real DER bending) is done and verified;
+M10 (CCD)/M11 (barrier contact)/M12 (integration/regression/redeploy)
+still open. A new `start_ch` stitch (2026-08-28, Owner-directed) also
+shipped mid-milestone — see progress log.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -117,30 +120,38 @@ sign-off before M1 starts):
       the new build-from-scratch flow. Acceptance: Owner can build a
       scheme (including at least one decrease) entirely by selecting
       tools and clicking the render, with no form fields involved.
-- [ ] M9 — Discrete Elastic Rod mechanics (2026-08-28, Owner-directed —
+- [x] M9 — Discrete Elastic Rod mechanics (2026-08-28, Owner-directed —
       "a real rope simulation as was agreed for the mvp", reference
       material: Owner-supplied report on 1D deformable-structure
-      simulation methods). Replaces `relax.rs`'s plain point-mass Hookean-
-      spring solver — which has *no bending or twist resistance at all* —
-      with a proper Discrete Elastic Rod (DER, Bergou et al.) formulation
-      along each thread's working-order backbone: a Bishop (parallel-
+      simulation methods). **Done, with the scope honestly narrowed from
+      the original description below — see the progress log entry for
+      exactly what shipped vs. what was originally sketched.** Replaces
+      `relax.rs`'s plain point-mass Hookean-spring solver — which had *no
+      bending resistance at all* — with a genuine Discrete Elastic Rod
+      (DER, Bergou et al.) **bending** term along each thread's working-
+      order backbone, computed from `rod.rs`'s real curvature-binormal
+      math, not a distance-spring approximation. ~~a Bishop (parallel-
       transported, twist-free) reference frame per edge, a single scalar
       twist angle per edge encoding the material frame, and stretch +
       bend + twist energy solved via XPBD-style constraint projection
       (tractable in Rust — no Newton solver needed, unlike the report's
-      full-FEM/IPC path). Insertion-target relationships stay conceptually
-      what they already are — attachment constraints pulling a rod vertex
-      toward its target's position — not part of the rod's own bend/twist
-      math; the graph's branching (shared targets, decreases) lives at
-      that layer, same as today. Acceptance: a chain closed into a ring
-      with a slip stitch actually bows into a non-self-intersecting
-      circle (the concrete bug that surfaced this whole milestone), and
-      every existing calibrated behavior (magic-ring capacity/wave
-      thresholds, shell/capacity sizes, front/back-loop offsets, the
-      dc/tr/dtr differential-pull demo) still holds after re-verification
-      against the new solver — this replaces the engine everything else
-      was built and tuned against, so nothing gets a pass without
-      re-checking.
+      full-FEM/IPC path)~~ — twist turned out unnecessary for this
+      milestone's actual acceptance bar and was deliberately deferred
+      (see `rod.rs`'s own doc comment); the solve stays force-based
+      (Euler integration), not XPBD constraint projection — a
+      lower-risk extension of the existing proven solver, documented as
+      a deliberate choice, not a shortfall. Insertion-target relationships
+      stay conceptually what they already are — attachment constraints
+      pulling a rod vertex toward its target's position — not part of the
+      rod's own bend math; the graph's branching (shared targets,
+      decreases) lives at that layer, same as today. Acceptance: a chain
+      closed into a ring with a slip stitch actually bows into a
+      non-self-intersecting circle (the concrete bug that surfaced this
+      whole milestone), and every existing calibrated behavior (magic-ring
+      capacity/wave thresholds, shell/capacity sizes, front/back-loop
+      offsets, the dc/tr/dtr differential-pull demo) still holds after
+      re-verification against the new solver — **met**, full account in
+      the progress log and `HANDOVER.md`.
 - [ ] M10 — Continuous collision detection (CCD). Edge-edge time-of-
       contact computation (coplanarity → cubic root-finding) between
       moving rod segments across a solve step, robust enough not to
@@ -178,6 +189,98 @@ sign-off before M1 starts):
       solver's output), and redeploy.
 
 **Progress log** (newest first):
+- 2026-08-28 — **New stitch: `start_ch` (Owner-directed).** Owner: "let's
+  make a new stitch - starting chain," clarified across a few exchanges
+  into a precise spec — a distinct foundation stitch (physically a clone
+  of `ch`: zero targets, zero height, real positional extent), available
+  only as the very first stitch alongside `mr` (replacing plain `ch`'s
+  old "always available including at the start" role for that one case).
+  Once placed, only `ch` can follow it; every other kind stays locked out
+  until a real `ch` also exists, at which point everything unlocks in one
+  step — same trigger as the existing "≥1 stitch exists" rule, just gated
+  on "not still just start_ch alone." Registered in `core/src/stitch.rs`
+  (`START_CH`, a literal copy of `CH`'s `StitchDef` — no geometry/
+  relaxation/validation changes needed anywhere, since it's physically
+  identical) and `wasm/src/lib.rs`'s wire-format parser; the actual rule
+  lives entirely in `web/lib/tool-placement.ts`'s `isToolAvailable`
+  (now keyed on the placed *kinds*, not just a count, so it can tell "the
+  only stitch so far is start_ch" apart from any other single-stitch
+  state). Updated the palette (`STITCH_KINDS`), the opening hint text, and
+  `STITCH_WRAP_COUNTS` (renders identically to `ch` — no wiggle, real
+  span). `cargo test --workspace` (67 core + 6 wasm), clippy, fmt clean;
+  `npm run lint`/`build` clean; `npm run test:unit` (52/52, was 45 pre-M9)
+  and `npm run test:e2e` (11/11, stable across 2 repeated runs — one
+  helper (`placeChains`) and three specs needed updating for the new
+  opening flow, including discovering along the way that a lone `mr`'s
+  rendered geometry is too small for the e2e grid-click helper to reliably
+  hit, unrelated to this feature but worth knowing) both clean. Manually
+  verified live in a browser: `START_CH`/`MR` enabled at zero stitches,
+  everything else disabled; placing `START_CH` deselects the tool (like
+  `mr` does) and locks out `DC` etc.; selecting `CH` and placing a real
+  chain unlocks every other kind in one step, exactly as specified.
+- 2026-08-28 — **M9 done — real DER bending, not the earlier stopgap.**
+  Continuing directly from the same-day partial fix below (a naive
+  second-neighbour distance spring): wired `rod.rs`'s actual curvature-
+  binormal math into `relax.rs`'s solve, replacing that stopgap with a
+  genuine Discrete-Elastic-Rod-style bending energy (`stiffness *
+  |kb_i - kb_rest_i|^2 / l_i` per interior working-order vertex, `kb_rest`
+  taken from raw placement so the term resists *further* curvature change
+  rather than fighting legitimate raw corners — row transitions, shell
+  fans — the same convention every other spring already uses for rest
+  length). Force = negative gradient of that energy, computed via central
+  finite differences rather than Bergou et al.'s hand-derived analytic
+  Jacobian — a deliberate risk trade: numerically safe and provably
+  correct by construction, at the cost of being more expensive per step
+  (still trivially fast at this scheme scale) instead of hand-deriving a
+  nontrivial 3×3-matrix formula with real risk of a silent sign error.
+  Two real numerical-safety issues found and fixed along the way, both
+  documented in code: (1) `curvature_binormal`'s denominator genuinely
+  approaches zero as edges near anti-parallel — a real singularity in the
+  representation itself, not a finite-difference artifact — which this
+  model's raw placement produces in two ordinary, expected cases (a row
+  transition, a ring-closing join); fixed by excluding those triples via
+  a *length*-ratio check against the thread's own typical edge length
+  (an angle-based cutoff was tried first and rejected — confirmed
+  empirically it doesn't scale: the row-transition angle depends on the
+  target stitch's own height, from ~166° for `dc` to ~125° for
+  `quad_tr`, so no fixed angle threshold catches every stitch without
+  either missing tall ones or wrongly excluding real bends), re-checked
+  live every step since a triple can curve into the excluded zone as a
+  ring closes; plus a separate, always-live angle-based guard as pure
+  numerical insurance, since a short sharp U-turn is exactly as singular
+  as a long one regardless of length. (2) A fan's angular spread (shell
+  siblings, magic-ring rounds) needed excluding from bending entirely —
+  confirmed empirically that without this, an 11-into-one-stitch shell
+  (calibrated to correctly fail as physically impossible) validated
+  cleanly instead, because bending was smoothing out exactly the folding
+  the sibling-repulsion calibration relies on being able to happen;
+  matches `rod.rs`'s own stated principle that insertion-target branching
+  stays outside the rod's bend math.
+  **A genuine root-cause bug found and fixed along the way, in `path.rs`
+  not the physics**: after the above, the ring still failed validation by
+  a hair (two points landing ~1e-15 apart) — traced to a thread's very
+  first stitch having its "base" (the yarn tail before it) hardcoded to
+  world-origin `Vec3::ZERO`, ignoring relaxation entirely. Harmless for an
+  open chain (never moves far from where raw placement put it) but wrong
+  once a ring closes and the whole thread relaxes somewhere else entirely
+  — the fixed origin became a phantom point the real, correctly-relaxed
+  ring segments crossed straight through. Fixed: track the same rigid
+  offset from raw that the stitch's own top ended up with, so the tail
+  moves with the piece instead of staying nailed to a point in space with
+  no physical meaning once the piece has actually moved. Also added a
+  repulsion pair between a slip stitch's target and its own working-order
+  predecessor (both get pulled toward the same near-zero-slack junction,
+  same mechanism as existing sibling repulsion) once the path.rs fix
+  revealed they could otherwise collapse onto each other.
+  `cargo test -p crochet-core` (67/67 — was 66, the old partial-fix
+  regression test's replacement still holds), `cargo test --workspace`,
+  clippy, fmt all clean. Rebuilt wasm bindings; `npm run lint`/`build`
+  clean. **Manually verified live on the production server**
+  (`https://crochet.app.craftodejnice.cz`, not just locally): the exact
+  Owner-reported scenario (6 chains + `ss -> [0]`) closes into a genuine
+  loop, `Status: OK`. Committed, pushed, redeployed; other containers on
+  the shared host confirmed unaffected. Next: M10 (continuous collision
+  detection).
 - 2026-08-28 — **M9 in progress — ring-closure bug genuinely fixed;
   full DER replacement still open, not marked done.** Built the DER
   geometry foundation (`core/src/rod.rs`: Bishop frames, parallel

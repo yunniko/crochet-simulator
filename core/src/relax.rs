@@ -29,6 +29,7 @@ use std::collections::HashMap;
 
 use crate::geometry::{place_scheme, PlacementError};
 use crate::graph::{Scheme, StitchRef};
+use crate::rod::curvature_binormal;
 use crate::stitch::{StitchRegistry, SS};
 use crate::vec3::Vec3;
 
@@ -38,27 +39,166 @@ use crate::vec3::Vec3;
 /// strand of yarn regardless of what's formed at either end.
 const CONTINUITY_STIFFNESS: f64 = 0.6;
 
-/// M9: bending resistance, realized as a spring between each vertex's two
-/// *second* working-order neighbours (`i-2` and `i`, spanning across
-/// vertex `i-1`) rather than a full analytic Discrete-Elastic-Rod
-/// curvature-gradient projection — see `rod.rs`'s module docs for the
-/// underlying DER math this approximates and why an XPBD-projection layer
-/// wasn't worth the added integration complexity here: this solver's
-/// existing spring forces are already empirically stable at the stiffness
-/// values in use (nothing here pushes toward the near-infinite-stiffness
-/// regime XPBD specifically exists to stabilize), so extending the same
-/// proven force-based mechanism to a second-neighbour pair is the lower-
-/// risk way to add genuine bending resistance. The rest length is the
-/// *raw*-placement second-neighbour distance (mirroring every other
-/// spring's rest-length convention) — for an initially-straight run this
-/// is the sum of the two edge lengths (the maximum possible second-
-/// neighbour distance), so the spring's preferred state is "stay as
-/// straight as this thread started," which is exactly what resists an
-/// external pull from concentrating all the curvature at one sharp fold:
-/// bending a little at *every* interior vertex costs less energy than
-/// bending a lot at one, so the whole run distributes curvature smoothly
-/// under an end-closing force instead of kinking.
-const BENDING_STIFFNESS: f64 = 0.5;
+/// M9: real bending resistance, derived from the actual Discrete Elastic
+/// Rod curvature measure (`rod::curvature_binormal`) rather than a plain
+/// distance spring. Each interior working-order vertex `i` (with edges
+/// `e_prev = p[i]-p[i-1]`, `e_curr = p[i+1]-p[i]`) contributes a bending
+/// energy `stiffness * |kb_i|^2 / l_i` (`l_i` the average of the two edge
+/// lengths — the standard DER Voronoi-length normalization, Bergou et al.
+/// eq. 2-ish), and the force applied each step is the negative gradient of
+/// that energy, computed via central finite differences
+/// (`bending_energy_gradient` below) rather than the hand-derived analytic
+/// Jacobian of `kb` (Bergou et al.'s appendix gives it in closed form, but
+/// it's a nontrivial per-component 3x3-matrix derivation with real risk of
+/// a silent sign/index error that wouldn't be obvious from a passing test
+/// suite — a numerical gradient of the *actual* energy is exactly as
+/// physically correct, cheap enough at this scheme scale (tens to low
+/// hundreds of vertices, well under real-time budget even at 150 steps),
+/// and impossible to get subtly wrong the way a mis-transcribed formula
+/// could be).
+///
+/// Deliberately still force-based Euler integration, not a full XPBD
+/// constraint-projection solve: this solver's existing spring forces are
+/// already empirically stable at the stiffness values in use (nothing here
+/// pushes toward the near-infinite-stiffness regime XPBD specifically
+/// exists to stabilize), so extending the same proven integration scheme
+/// with a real curvature-derived force is the lower-risk way to add
+/// genuine bending resistance without standing up a second solver
+/// architecture alongside this one.
+///
+/// `|kb_i|` is exactly zero for a perfectly collinear triple by
+/// construction (see `curvature_binormal`'s own doc comment) — a chain's
+/// raw placement lays every link on one straight line
+/// (`geometry.rs::lays_out_as_line`), so this force alone has nothing to
+/// act on until something breaks that exact symmetry; see
+/// `CHAIN_SYMMETRY_BREAK_AMPLITUDE` in `geometry.rs` for the (tiny,
+/// deterministic) seed that does that.
+const BENDING_STIFFNESS: f64 = 0.2;
+
+/// The finite-difference step used to numerically differentiate the
+/// bending energy (see `BENDING_STIFFNESS`). Small relative to typical
+/// yarn-scale distances (segment lengths are order 0.1-1.0) so the
+/// approximation error is negligible, large enough relative to f64
+/// epsilon that the subtraction in `bending_energy_gradient` doesn't lose
+/// precision to cancellation.
+const BENDING_GRADIENT_EPS: f64 = 1e-6;
+
+/// A bending triple is skipped entirely (no force computed at all) when
+/// either of its raw edges is longer than this multiple of the thread's
+/// own *typical* raw continuity-edge length (see `bending_triples`'
+/// construction, which computes that typical length per thread before
+/// applying this). This isn't a numerical band-aid on an otherwise-
+/// arbitrary cutoff: `curvature_binormal`'s own doc comment already notes
+/// its denominator (`|e_prev||e_curr| + e_prev·e_curr`) approaches zero —
+/// a real singularity of the discrete-curvature-binormal representation
+/// itself (Bergou et al. note the same limitation), not an artifact of
+/// computing its gradient by finite differences — as the turn angle
+/// approaches 180 degrees, and this data model's raw placement produces
+/// exactly that configuration in two ordinary, expected cases: a working-
+/// order jump back across a row (chain's end to the next row's first
+/// stitch, placed near the *start* of the row below) and a slip-stitch's
+/// continuity edge back to an early target (the ring-closure case this
+/// milestone exists for). Neither is a real physical rod bending 180
+/// degrees; they're this model's insertion-graph topology, already
+/// handled by the ordinary continuity/insertion springs.
+///
+/// A **length ratio**, not a turn-angle cutoff, is what actually
+/// identifies these: an angle threshold was tried first and doesn't scale
+/// — a row-transition edge's angle relative to the row depends on the
+/// target stitch's own height (confirmed empirically: dc's transition is
+/// ~166 degrees from straight, dtr's only ~143, and taller registry
+/// stitches keep trending further from 180 as height grows, so no single
+/// angle cutoff catches all of them without either missing tall-stitch
+/// transitions or wrongly excluding genuine sharp-but-real bends). A
+/// row-transition or ring-closing edge, though, is characteristically
+/// much *longer* than an ordinary within-row/within-chain continuity
+/// edge regardless of stitch height — it spans back across the whole row
+/// or chain — so comparing against the thread's own typical spacing is
+/// scale-invariant in exactly the way the pipeline's existing calibrated
+/// behaviour (docs §5a, the dc/tr/dtr differential-pull demo) needs it to
+/// be.
+const BENDING_MAX_EDGE_RATIO: f64 = 2.0;
+
+/// Pure numerical-safety guard, re-checked every step against the
+/// *current* dynamic configuration (unlike `BENDING_MAX_EDGE_RATIO`,
+/// which is about identifying topological jumps and is checked against
+/// current length too but exists for a different reason — see its own
+/// doc comment). `curvature_binormal`'s denominator is
+/// `|e_prev||e_curr|(1 + cos(theta))`, which approaches zero as the turn
+/// angle `theta` approaches 180 degrees *regardless of edge length* — a
+/// short, sharp U-turn is exactly as numerically dangerous for finite-
+/// difference differentiation as a long one. -0.9 leaves real margin
+/// before the denominator gets small enough to matter (edges would need
+/// to be within ~26 degrees of exactly anti-parallel), while still
+/// letting genuinely sharp — but not near-singular — bends (e.g. a tight
+/// corner well short of a full fold-back) get real bending resistance.
+const BENDING_SAFETY_MIN_TURN_COSINE: f64 = -0.9;
+
+/// The Discrete-Elastic-Rod-style bending energy at one interior
+/// working-order vertex, given its two neighbouring positions and the
+/// vertex's **rest curvature binormal** (`kb_rest` — see
+/// `bending_triples`' construction below for where this comes from and
+/// why it isn't simply zero). See `BENDING_STIFFNESS`'s doc comment for
+/// the rest of the formula and its provenance.
+fn bending_energy(p_prev: Vec3, p_curr: Vec3, p_next: Vec3, kb_rest: Vec3, stiffness: f64) -> f64 {
+    let e_prev = p_curr - p_prev;
+    let e_curr = p_next - p_curr;
+    let l = (e_prev.length() + e_curr.length()) * 0.5;
+    if l < 1e-9 {
+        // Coincident/near-coincident vertices (e.g. a run of zero-height
+        // ss/mr stitches): no well-defined curvature contribution here:
+        // other constraints (continuity/insertion springs) are what pull
+        // these apart, not bending.
+        return 0.0;
+    }
+    let kb = curvature_binormal(e_prev, e_curr);
+    let delta = kb - kb_rest;
+    stiffness * delta.dot(delta) / l
+}
+
+/// Returns `(F_prev, F_curr, F_next)` — the force on each of the three
+/// vertices from the bending energy at their shared interior vertex,
+/// i.e. the negative central-finite-difference gradient of
+/// [`bending_energy`] with respect to each point in turn.
+fn bending_energy_gradient(
+    p_prev: Vec3,
+    p_curr: Vec3,
+    p_next: Vec3,
+    kb_rest: Vec3,
+    stiffness: f64,
+) -> (Vec3, Vec3, Vec3) {
+    let axes = [
+        Vec3::new(BENDING_GRADIENT_EPS, 0.0, 0.0),
+        Vec3::new(0.0, BENDING_GRADIENT_EPS, 0.0),
+        Vec3::new(0.0, 0.0, BENDING_GRADIENT_EPS),
+    ];
+
+    let perturbed = |which: u8, offset: Vec3| -> (Vec3, Vec3, Vec3) {
+        match which {
+            0 => (p_prev + offset, p_curr, p_next),
+            1 => (p_prev, p_curr + offset, p_next),
+            _ => (p_prev, p_curr, p_next + offset),
+        }
+    };
+
+    let gradient_for = |which: u8| -> Vec3 {
+        let mut components = [0.0f64; 3];
+        for (axis_idx, axis) in axes.iter().enumerate() {
+            let (pp, pc, pn) = perturbed(which, *axis);
+            let e_plus = bending_energy(pp, pc, pn, kb_rest, stiffness);
+            let (pp, pc, pn) = perturbed(which, *axis * -1.0);
+            let e_minus = bending_energy(pp, pc, pn, kb_rest, stiffness);
+            components[axis_idx] = (e_plus - e_minus) / (2.0 * BENDING_GRADIENT_EPS);
+        }
+        Vec3::new(components[0], components[1], components[2])
+    };
+
+    (
+        gradient_for(0) * -1.0,
+        gradient_for(1) * -1.0,
+        gradient_for(2) * -1.0,
+    )
+}
 
 /// The continuity edge leading *into* a slip stitch uses this instead of
 /// the raw-placement distance every other stitch's continuity edge uses —
@@ -199,22 +339,110 @@ pub fn relax_scheme(
                     stiffness: CONTINUITY_STIFFNESS,
                 });
             }
+        }
+    }
 
-            // M9 bending resistance — see `BENDING_STIFFNESS`'s own
-            // comment for the mechanism. Needs a second predecessor, so
-            // only from the third stitch in a thread onward.
-            if i > 1 {
-                let second_prev = StitchRef::new(thread_idx, i - 2);
-                let rest_length = raw.threads[thread_idx][i]
-                    .top
-                    .distance(&raw.threads[thread_idx][i - 2].top);
-                constraints.push(SpringConstraint {
-                    a: r,
-                    b: second_prev,
-                    rest_length,
-                    stiffness: BENDING_STIFFNESS,
-                });
+    // M9 bending resistance (see `BENDING_STIFFNESS`'s doc comment): one
+    // triple per interior working-order vertex, i.e. every vertex with
+    // both a predecessor and a successor in the same thread. Each triple
+    // carries its own **rest curvature binormal**, computed once from
+    // *raw* placement (same convention every other spring's rest length
+    // already uses) rather than assumed to be zero. This matters: this
+    // model's raw placement legitimately has real corners in it that
+    // aren't defects to be flattened — e.g. working order jumping from
+    // the end of a foundation-chain row back to the row above's first
+    // stitch, or a shell's siblings fanning out at a real angle around a
+    // shared target. Bending resistance's job is to resist *further*
+    // curvature change from whatever raw placement already established,
+    // the same way `CONTINUITY_STIFFNESS` resists further *stretch* from
+    // the raw distance rather than pulling everything to zero length. A
+    // freshly-placed chain has zero raw curvature (it's laid out on one
+    // straight line), so `kb_rest` is zero there and this reduces to
+    // "resist introducing curvature" exactly as needed for the ring-
+    // closure fix — but a scheme with genuine raw corners doesn't get
+    // fought by its own bending term.
+    // A "fan edge" connects two consecutive-in-working-order stitches that
+    // are both converging on the same insertion point — either literal
+    // siblings (identical single-element target lists: a shell, a magic-
+    // ring round) or the edge from the shared target itself to the first
+    // sibling worked into it (`b`'s one target *is* `a`). Per `rod.rs`'s
+    // own module docs, insertion-target branching stays outside the rod's
+    // own bend math — a fan's angular spread is `SIBLING_REPULSION_*`'s
+    // job, tuned and calibrated against real capacity limits (docs §5a)
+    // before this milestone existed. A bending triple touching a fan edge
+    // would treat that tuned angular spread as "curvature to resist
+    // changing," fighting the repulsion calibration — confirmed
+    // empirically: excluding only sibling-sibling edges wasn't enough, an
+    // 11-into-one-stitch shell (calibrated to correctly fail as physically
+    // impossible) still validated cleanly, because the *first* fan edge
+    // (target -> its first dependent) was still getting bent-resistance
+    // treatment and that alone was enough to reshape the fan's base.
+    let is_fan_edge = |thread_idx: usize, a_idx: usize, b_idx: usize| -> bool {
+        let a = &scheme.threads[thread_idx].stitches[a_idx];
+        let b = &scheme.threads[thread_idx].stitches[b_idx];
+        if let [only] = b.targets.as_slice() {
+            if *only == StitchRef::new(thread_idx, a_idx) {
+                return true;
             }
+        }
+        matches!(
+            (a.targets.as_slice(), b.targets.as_slice()),
+            ([x], [y]) if x == y
+        )
+    };
+
+    let mut bending_triples: Vec<(StitchRef, StitchRef, StitchRef, Vec3, f64)> = Vec::new();
+    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
+        if thread.stitches.len() < 3 {
+            continue;
+        }
+
+        // The thread's own typical raw continuity-edge length (median,
+        // not mean — robust against the very outliers, like a row jump
+        // or a ring-closing join, this is meant to help identify). See
+        // `BENDING_MAX_EDGE_RATIO`'s doc comment.
+        let mut edge_lengths: Vec<f64> = (1..thread.stitches.len())
+            .map(|i| {
+                raw.threads[thread_idx][i]
+                    .top
+                    .distance(&raw.threads[thread_idx][i - 1].top)
+            })
+            .filter(|d| *d > 1e-9)
+            .collect();
+        if edge_lengths.is_empty() {
+            continue;
+        }
+        edge_lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let typical_length = edge_lengths[edge_lengths.len() / 2];
+        let max_edge_length = typical_length * BENDING_MAX_EDGE_RATIO;
+
+        for i in 1..thread.stitches.len() - 1 {
+            if is_fan_edge(thread_idx, i - 1, i) || is_fan_edge(thread_idx, i, i + 1) {
+                continue;
+            }
+
+            let raw_prev = raw.threads[thread_idx][i - 1].top;
+            let raw_curr = raw.threads[thread_idx][i].top;
+            let raw_next = raw.threads[thread_idx][i + 1].top;
+            let e_prev_raw = raw_curr - raw_prev;
+            let e_curr_raw = raw_next - raw_curr;
+
+            // Skip a triple spanning an unusually long raw edge (a row
+            // transition, a ring-closing join) — see
+            // `BENDING_MAX_EDGE_RATIO`'s doc comment for why length,
+            // not turn angle, is the robust signal here.
+            if e_prev_raw.length() > max_edge_length || e_curr_raw.length() > max_edge_length {
+                continue;
+            }
+
+            let kb_rest = curvature_binormal(e_prev_raw, e_curr_raw);
+            bending_triples.push((
+                StitchRef::new(thread_idx, i - 1),
+                StitchRef::new(thread_idx, i),
+                StitchRef::new(thread_idx, i + 1),
+                kb_rest,
+                max_edge_length,
+            ));
         }
     }
 
@@ -240,6 +468,32 @@ pub fn relax_scheme(
         }
     }
 
+    // A slip stitch's target and its own working-order predecessor are
+    // *both* pulled toward the same near-zero-slack junction (`ss`'s
+    // insertion spring wants it exactly at its target; its continuity
+    // spring wants it within `SLIP_STITCH_CONTINUITY_SLACK` of its
+    // predecessor) — without this, nothing stops those two, otherwise
+    // unrelated, stitches from collapsing onto each other as ss itself
+    // is squeezed toward both simultaneously (confirmed empirically: the
+    // ring-closure regression test's remaining failure was exactly this —
+    // the chain's start and its second-to-last link landing within 1e-15
+    // of each other, a real zero-clearance overlap, not a false
+    // positive). Same mechanism and tuning as sibling repulsion above,
+    // for the same reason: keep genuinely distinct points of yarn from
+    // occupying the same space during relaxation, not just after it.
+    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
+        for (i, stitch) in thread.stitches.iter().enumerate() {
+            if stitch.kind == SS {
+                if let ([target], true) = (stitch.targets.as_slice(), i > 0) {
+                    let predecessor = StitchRef::new(thread_idx, i - 1);
+                    if *target != predecessor {
+                        repulsion_pairs.push((*target, predecessor));
+                    }
+                }
+            }
+        }
+    }
+
     let mut velocities: HashMap<StitchRef, Vec3> = refs.iter().map(|r| (*r, Vec3::ZERO)).collect();
 
     for _ in 0..params.steps {
@@ -260,6 +514,54 @@ pub fn relax_scheme(
             let fb = forces[&c.b];
             forces.insert(c.a, fa + force_on_a);
             forces.insert(c.b, fb - force_on_a);
+        }
+
+        for &(prev, curr, next, kb_rest, max_edge_length) in &bending_triples {
+            let p_prev = positions[&prev];
+            let p_curr = positions[&curr];
+            let p_next = positions[&next];
+
+            // Re-check the *length* exclusion against the current (not
+            // just raw) configuration every step — see
+            // `BENDING_MAX_EDGE_RATIO`'s doc comment. A triple that
+            // started well clear of the excluded zone can shrink back
+            // into ordinary range as relaxation proceeds (that's the
+            // whole point of a ring closing up), so this has to be a
+            // live check, not just a one-time filter at construction.
+            let e_prev = p_curr - p_prev;
+            let e_curr = p_next - p_curr;
+            if e_prev.length() > max_edge_length || e_curr.length() > max_edge_length {
+                continue;
+            }
+
+            // Separately: a genuine numerical-safety guard, independent
+            // of the length-based topological exclusion above. Length
+            // identifies *which* edges are row-transition/ring-closing
+            // jumps (for calibration correctness — see
+            // `BENDING_MAX_EDGE_RATIO`), but the actual numerical
+            // singularity `curvature_binormal` warns about is a function
+            // of *angle* alone (`|e_prev||e_curr|(1 + cos(theta))`, which
+            // -> 0 as theta -> 180 degrees regardless of edge length) — a
+            // short, sharp U-turn is exactly as numerically dangerous for
+            // finite differences as a long one. This can develop mid-
+            // relaxation even on a triple that passed the length check
+            // (confirmed empirically: without this second guard, the
+            // ring-closure test still diverged even after the length
+            // exclusion alone was enough to fix every calibration test),
+            // so both checks run independently, every step.
+            let cos_turn = e_prev.normalized().dot(e_curr.normalized());
+            if cos_turn < BENDING_SAFETY_MIN_TURN_COSINE {
+                continue;
+            }
+
+            let (f_prev, f_curr, f_next) =
+                bending_energy_gradient(p_prev, p_curr, p_next, kb_rest, BENDING_STIFFNESS);
+            let fp = forces[&prev];
+            let fc = forces[&curr];
+            let fn_ = forces[&next];
+            forces.insert(prev, fp + f_prev);
+            forces.insert(curr, fc + f_curr);
+            forces.insert(next, fn_ + f_next);
         }
 
         for &(a, b) in &repulsion_pairs {

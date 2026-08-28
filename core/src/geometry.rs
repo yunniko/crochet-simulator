@@ -24,7 +24,7 @@ const CHAIN_STEP_X: f64 = 1.0;
 /// (never-closed) chain still reads as visually straight; only matters
 /// once real bending resistance (relax.rs's `BENDING_STIFFNESS`) has
 /// something non-collinear to actually smooth into a curve.
-const CHAIN_SYMMETRY_BREAK_AMPLITUDE: f64 = 0.001;
+const CHAIN_SYMMETRY_BREAK_AMPLITUDE: f64 = 0.02;
 /// How many siblings comfortably share one target before it's under
 /// strain — the Owner's own calibration (docs §5a): "seven is hard but
 /// possible [into one stitch], eleven won't fit"; a tightened magic ring
