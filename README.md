@@ -14,9 +14,8 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M10 done (of a 12-milestone plan — M11-M12 add collision-preventing
-contact on top of M9's real rope physics and M10's collision-detection
-primitive). **Live at
+M1–M11 done (of a 12-milestone plan — M12 is final integration/
+regression/redeploy against the full new physics stack). **Live at
 https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
@@ -24,10 +23,13 @@ siblings and correctly flags ~11+; a tightened magic ring reads as pointy
 at 3-5, flat at 6-8, wavy at 9+; front/back loop targeting is
 geometrically real, supporting techniques like mosaic crochet), a
 relaxation solve combining Hookean springs (stitch topology, not a
-separate material property, determines stretchiness) with a genuine
-Discrete Elastic Rod bending term (M9 — a chain closed into a ring with a
-slip stitch actually bows into a closed loop, not just a straight pull),
-and self-intersection / stitch-count validation on the relaxed shape.
+separate material property, determines stretchiness), a genuine Discrete
+Elastic Rod bending term (M9 — a chain closed into a ring with a slip
+stitch actually bows into a closed loop, not just a straight pull), and
+an IPC-style barrier contact force (M11) actively keeping previously-
+uncovered non-adjacent stitch pairs from settling into an overlapping
+configuration in the first place, plus self-intersection / stitch-count
+validation on the relaxed shape as a final check.
 `wasm/` bridges it to the browser via `wasm-bindgen`, exposing one
 general `compute_scheme` call for whatever graph the UI builds. `web/` is
 a direct-manipulation editor: the app starts with a plain starting piece
@@ -48,10 +50,12 @@ stitches get no capacity/ring geometric treatment; chains don't yet
 visually read as linked ovals in the renderer; a pending-target highlight
 can be visually masked when a bridge segment happens to retrace a
 stitch's own path; M9's DER bending covers stretch+bend only, not twist —
-deliberately deferred, see `HANDOVER.md`'s M9 entry; M10 added a tested
-continuous-collision-detection primitive (`core/src/ccd.rs`) but it isn't
-wired into the solve yet — self-intersections are still only flagged
-after the fact, not yet prevented during relaxation; that's M11-M12).
+deliberately deferred, see `HANDOVER.md`'s M9 entry; M11's barrier
+contact only covers stitch pairs with no other mechanism already keeping
+them apart — a fan's own siblings can still cross their *connecting
+bridges* (not just their tops, which sibling repulsion does protect)
+under a strong enough external pull, a real pre-existing gap M11's own
+testing surfaced but didn't fix, see `HANDOVER.md`'s M11 entry).
 
 ## Run locally
 

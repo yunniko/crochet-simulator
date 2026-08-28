@@ -1298,6 +1298,87 @@ milestone (M11) rather than here.
   rebuild or redeploy for this milestone: nothing in the live app's
   behavior changed, since nothing user-facing calls this yet.
 
+**M11 done (2026-08-28): barrier-based contact response.** `relax.rs`
+gained a genuine collision-preventing force — not just M10's detection,
+an actual repulsion — for the one case nothing before this covered at
+all: two stitches that aren't siblings (don't share a target) and aren't
+graph-adjacent (no spring between them), which previously had *zero*
+mechanism keeping them apart during relaxation.
+
+- **The barrier formula**: `E(d) = -stiffness*(d-d_hat)^2*ln(d/d_hat)`
+  for `0 < d < d_hat`, exactly `0.0` — value *and* gradient — at or
+  beyond `d_hat` (`BARRIER_ACTIVE_DISTANCE = 0.3`, the same margin
+  `SIBLING_REPULSION_MIN_DISTANCE` already uses, kept as its own named
+  constant rather than literally shared so each mechanism's tuning stays
+  independent). This is the standard IPC barrier shape (Li et al.,
+  "Incremental Potential Contact") — chosen over a plain linear spring
+  specifically because a linear force stays finite at `d=0`, so nothing
+  about its *shape* rules out a pair settling uncomfortably close or even
+  passing through each other across a step; a barrier's force grows
+  without bound as `d -> 0`, so genuine interpenetration can't become a
+  stable equilibrium the way it could with a merely-stronger linear
+  force.
+- **Which pairs get it**: built as "every stitch pair, minus whatever a
+  spring or `repulsion_pairs` (siblings, an `ss`'s target/predecessor)
+  already covers" — deliberately *subtractive* rather than trying to
+  enumerate "barrier-eligible" pairs directly, so it can never silently
+  fall out of sync with what those other mechanisms end up covering as
+  they change. Being exactly zero beyond `d_hat` means this can only ever
+  *add* coverage, never perturb a pair that was already comfortably
+  separated — confirmed directly: all 91 existing core tests (including
+  every capacity/calibration test) pass completely unchanged after adding
+  this, real evidence the scoping actually worked, not just an
+  assumption.
+- **Force, not energy, in the hot loop**: `barrier_energy_derivative` is
+  hand-derived (a single-variable scalar function — unlike M9's bending
+  gradient, there's no multi-point vector cross-product expression here
+  to make a numerical gradient the obviously safer choice), but still
+  checked against a central-finite-difference numerical derivative of
+  `barrier_energy` in this module's own tests — the same "don't just
+  trust the algebra" discipline M10's cubic-root solver also needed
+  (and where it caught a real bug — see M10's own entry above).
+- **A real, separate limitation found while building the adversarial
+  test — not fixed, reported honestly rather than routed around
+  silently.** An early version of the acceptance test used two 5-sibling
+  shells (each a magic ring + 5 dc) pinned close together. It found that
+  pushing unevenly on a fan's members — by this new barrier, or by *any*
+  sufficiently strong asymmetric external force — can swap their angular
+  order around the shared target, crossing the *bridges* between
+  adjacent siblings even though `SIBLING_REPULSION_*` (M2-era) keeps
+  their *tops* comfortably apart. Confirmed this is a genuinely
+  *pre-existing* gap, not something M11 introduces: sibling repulsion has
+  only ever operated on top-to-top distance, never on the bridges
+  connecting consecutive siblings, and nothing before M11 ever exercised
+  a force strong/asymmetric enough to expose it. Root-caused with a
+  focused diagnostic (an isolated single shell, no second shell involved,
+  validates perfectly cleanly — the distortion only appears once an
+  external pull is introduced), then deliberately *not* fixed within
+  M11's own scope — a real fix likely needs bridge-aware repulsion or
+  some way of preserving a fan's angular ordering under perturbation, a
+  distinct piece of work from "add barrier contact for uncovered pairs."
+  The final M11 acceptance test was redesigned around two *lone*,
+  single-target dc's (no fan, no angular-ordering question) specifically
+  so it tests M11's own actual claim in isolation rather than conflating
+  it with this separate, older issue.
+- **What M11 does *not* include, honestly** (same scoping discipline as
+  M9/M10): still force-based Euler integration, not genuine XPBD
+  constraint projection — the original milestone description said
+  "integrated into the XPBD solve," inherited from before M9 had already
+  settled that this solver stays force-based; `ccd.rs` (M10) is used to
+  *verify* the barrier actually resolves adversarial cases (a dedicated
+  test checks zero mid-relaxation tunnelling via CCD, not just the
+  discrete end state), not wired in as a live per-step gate limiting how
+  far the solver is allowed to move in a single step (the report's own
+  conservative-step-size role for CCD, in the fuller C-IPC picture) — a
+  real, identified, deliberately out-of-scope piece, not an oversight.
+- **Verified**: `cargo test --workspace` (91 core + 6 wasm, was 84),
+  clippy, fmt all clean. Rebuilt wasm bindings — unlike M10, this
+  milestone changes `relax_scheme`'s actual output for any scheme with
+  close non-adjacent pairs, so (unlike M10) a rebuild was genuinely
+  needed. `npm run lint`/`build` clean, `test:unit` (52/52), `test:e2e`
+  (11/11) — every existing preset/flow still validates identically,
+  direct confirmation the barrier leaves already-separated schemes alone.
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**
@@ -1351,14 +1432,15 @@ step would.
   `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), capacity-
   aware raw placement geometry (§5a, `geometry.rs`, M1), a relaxation/
   elasticity solve combining Hookean springs with sibling repulsion (§6,
-  §5a, `relax.rs`, M2) and genuine Discrete Elastic Rod bending
-  (`rod.rs`'s curvature-binormal math, wired into `relax.rs`, M9),
-  continuous relaxed-path reconstruction (`path.rs`, M3), self-
-  intersection/count validation on that path (§8, `validate.rs`, M3), and
-  a not-yet-wired-in continuous collision detection primitive
-  (`ccd.rs`, M10 — pure geometry today, M11's job to actually use it in
-  the solve). Pure Rust, unit-testable without any UI, no dependency on
-  `wasm`/`web`.
+  §5a, `relax.rs`, M2), genuine Discrete Elastic Rod bending (`rod.rs`'s
+  curvature-binormal math, wired into `relax.rs`, M9), and an IPC-style
+  barrier contact force for stitch pairs no other mechanism covers (M11,
+  also in `relax.rs`), continuous relaxed-path reconstruction (`path.rs`,
+  M3), self-intersection/count validation on that path (§8, `validate.rs`,
+  M3), and a continuous collision detection primitive (`ccd.rs`, M10 —
+  pure geometry, used to *verify* M11's barrier works rather than wired
+  in as a live per-step gate). Pure Rust, unit-testable without any UI, no
+  dependency on `wasm`/`web`.
 - `wasm/` (M4, generalised M5) — thin `wasm-bindgen` crate: one exported
   `compute_scheme(wire)` taking whatever stitch graph the editor built (as
   plain JSON), running it through `core`'s exact pipeline, and serialising
@@ -1375,18 +1457,24 @@ step would.
 
 ## Next steps
 
-(Superseded — this note dates from just after M1; M2-M10 are all done,
-and M11-M12 are the current live scope. See `GOALS.md`'s milestone list
-and this file's M10-done entry above for the real current state.)
+(Superseded — this note dates from just after M1; M2-M11 are all done,
+and M12 is the current live scope. See `GOALS.md`'s milestone list and
+this file's M11-done entry above for the real current state.)
 
-M9 (real DER bending, verified live on production) and M10 (edge-edge CCD
-primitive) are done. Next: M11 (C-IPC-lite barrier contact — wiring
-`ccd.rs`'s output into `relax.rs`'s actual solve loop so a detected
-crossing gets prevented, not just detected) → M12 (integration/full
-regression/redeploy). The `start_ch` stitch shipped
-mid-milestone as a separate Owner-directed UX addition, unrelated to the
-M9-M12 physics work — no further action needed there unless the Owner
-asks for more.
+M9 (real DER bending), M10 (edge-edge CCD primitive), and M11 (barrier-
+based contact response) are all done and verified, including live on
+production for M9. Next: M12 — final integration, re-verifying every
+existing test and calibrated behavior against the full M9-M11 solver
+stack end to end, updating `docs/crochet-context.md` for the new physics
+model, verifying in a real browser, and redeploying. Worth deciding
+explicitly at M12 whether the fan-bridge-crossing limitation M11's own
+progress log entry describes (sibling repulsion keeps tops apart but not
+the bridges between them, under a strong enough external force) is in
+scope to fix now or stays a documented follow-up — it predates M11 and
+isn't part of what M9-M11 were asked to deliver, but M12 is the natural
+checkpoint to raise it at. The `start_ch` stitch shipped mid-milestone as
+a separate Owner-directed UX addition, unrelated to the M9-M12 physics
+work — no further action needed there unless the Owner asks for more.
 
 ## Domain reference
 

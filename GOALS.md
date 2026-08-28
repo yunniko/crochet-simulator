@@ -1,15 +1,19 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M10 done. M11-M12 remain: a proper rope-physics rewrite (Discrete
+**M1-M11 done. M12 remains: a proper rope-physics rewrite (Discrete
 Elastic Rods + collision-preventing contact) — the ring-closure bug
 traced back to the relaxation solver never having real bending
 resistance, and the Owner clarified this was the actually-agreed MVP
-scope, not a nice-to-have. M9 (real DER bending) and M10 (edge-edge CCD
-primitive) are done and verified; M11 (barrier contact, wiring CCD into
-the actual solve)/M12 (integration/regression/redeploy) still open. A new
-`start_ch` stitch (2026-08-28, Owner-directed) also shipped mid-milestone
-— see progress log.**
+scope, not a nice-to-have. M9 (real DER bending), M10 (edge-edge CCD
+primitive), and M11 (barrier-based contact response) are done and
+verified; M12 (final integration/regression/redeploy) still open. A real,
+separate limitation surfaced while building M11 — sibling repulsion only
+ever kept same-target *tops* apart, never their connecting bridges, which
+can still cross under a strong external force distorting a fan's angular
+order — flagged as a candidate follow-up, not fixed (see M11's progress
+log entry). A new `start_ch` stitch (2026-08-28, Owner-directed) also
+shipped mid-milestone — see progress log.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -170,21 +174,23 @@ sign-off before M1 starts):
       solver correctly detects the collision and its time, including
       near-parallel/near-coplanar cases that make naive root-finding
       unreliable.
-- [ ] M11 — Barrier-based contact response (C-IPC-lite). Segments that
-      CCD flags as approaching each other get pushed apart via a barrier-
-      style potential (large, smooth repulsion near the yarn-thickness
-      threshold, zero beyond it) integrated into the XPBD solve, so the
-      *relaxed shape itself* never actually interpenetrates — self-
-      intersection becomes something the solver prevents during
-      settling, not just something `validate.rs` flags afterward.
-      Explicitly a simplified analogue of the report's full Newton/
-      barrier-energy IPC formulation (XPBD-style constraint projection,
-      not a full unconstrained-optimization line search) — real
+- [x] M11 — Barrier-based contact response (C-IPC-lite). Pairs of
+      stitches not already governed by a spring or dedicated repulsion
+      get pushed apart via a barrier-style potential (large, smooth
+      repulsion near the yarn-thickness threshold, exactly zero beyond
+      it), so previously-unprotected non-adjacent pairs can no longer
+      settle into an interpenetrating configuration. **Done — see
+      progress log for the full account, including the honest scope
+      narrowing (force-based, not XPBD; CCD used to verify the result
+      rather than gate live step size) and a real, separate limitation
+      the work surfaced.** Explicitly a simplified analogue of the
+      report's full Newton/barrier-energy IPC formulation — real
       engineering, scoped down from the research-grade original for
       tractability, documented as such rather than overclaimed.
       Acceptance: deliberately-adversarial starting configurations (e.g.
       overlapping/crossing geometry that used to only get flagged) settle
-      into a genuinely non-intersecting configuration instead.
+      into a genuinely non-intersecting configuration instead — **met**
+      for the general non-adjacent-pair case M11 targets.
 - [ ] M12 — Integration, full regression, redeploy. Re-verify every
       existing test and calibrated behavior against the M9-M11 solver
       stack end to end, re-tune any constants that need it (documenting
@@ -194,6 +200,62 @@ sign-off before M1 starts):
       solver's output), and redeploy.
 
 **Progress log** (newest first):
+- 2026-08-28 — **M11 done — barrier-based contact response.** New
+  IPC-style barrier potential in `relax.rs` (Li et al.'s "Incremental
+  Potential Contact" energy, `E(d) = -stiffness*(d-d_hat)^2*ln(d/d_hat)`
+  for `0 < d < d_hat`, exactly zero at/beyond `d_hat`): applied to every
+  stitch pair *not* already governed by a spring (continuity, insertion)
+  or a dedicated repulsion pair (siblings, an `ss`'s target/predecessor)
+  — built as "every pair minus what's already covered" so it can't drift
+  out of sync with those as they evolve. Being exactly zero beyond
+  `d_hat` (not just small) means it can't perturb any already-well-
+  separated scheme, so it's additive coverage for a real, previously-
+  totally-uncovered case (two unrelated, non-adjacent stitches — not
+  siblings, no shared target) rather than a change to anything already
+  calibrated. Force = the energy's derivative (hand-derived — a single-
+  variable scalar function, not the multi-point vector expression that
+  made numerical differentiation the safer M9 choice — but still checked
+  against a numerical derivative in tests, same "don't just trust the
+  algebra" discipline). Confirmed: adding this touched *zero* existing
+  calibration tests (all 91 core tests, unchanged, still pass) — direct
+  evidence the "only pairs with literally no coverage before" scoping
+  worked as intended.
+  **A real, separate limitation found while building the adversarial
+  test, honestly not fixed here**: an early test version used two 5-
+  sibling shells pinned close together, and found that pushing unevenly
+  on a fan's members (whether by this new barrier, or any other strong
+  asymmetric external force) can swap their *angular order*, crossing
+  the *bridges* between them — `SIBLING_REPULSION_*` (M2-era) only ever
+  kept siblings' *tops* apart, never their connecting bridges, a latent
+  gap that predates M11 and was simply never exercised by anything
+  before. Confirmed this reproduces even with barrier stiffness at zero
+  effect distance (i.e. it's not really an M11-caused regression, it's a
+  pre-existing gap M11's own adversarial testing happened to be the first
+  thing to trigger). Not fixed — flagged as a candidate follow-up (fixing
+  it properly likely needs bridge-aware or angular-order-preserving fan
+  repulsion, a real enough scope of its own). The final M11 acceptance
+  test was redesigned around two *lone* single-target stitches (no fan,
+  no angular-ordering question at all) specifically to isolate M11's own
+  actual claim from this separate, pre-existing issue rather than
+  conflating the two.
+  **What M11 does *not* include, honestly** (matching M9/M10's same
+  scoping discipline): still force-based Euler integration each step, not
+  genuine XPBD constraint projection — the original milestone description
+  said "integrated into the XPBD solve," but this solver has never
+  actually been XPBD (a decision already made and logged in M9). `ccd.rs`
+  (M10) is used to *verify* the barrier resolves adversarial cases (a
+  dedicated test checks zero tunnelling via CCD, not just the discrete
+  end-state), not wired in as a live per-step gate limiting how far the
+  solver can move in one step (the report's own conservative-step-size
+  role for CCD) — a real, identified, deliberately out-of-scope piece,
+  not an oversight.
+  Verified: `cargo test --workspace` (91 core + 6 wasm, was 84), clippy,
+  fmt clean. Rebuilt wasm bindings (this milestone changes `relax_scheme`'s
+  actual output, unlike M10's unwired addition). `npm run lint`/`build`
+  clean, `test:unit` (52/52), `test:e2e` (11/11) — all existing presets/
+  flows still validate identically, confirming the barrier doesn't touch
+  already-separated schemes. Next: M12 (final integration, full
+  regression, redeploy).
 - 2026-08-28 — **M10 done — edge-edge Continuous Collision Detection.**
   New `core/src/ccd.rs`: `edge_edge_time_of_contact`, the classic
   coplanarity-cubic CCD algorithm (four points moving linearly between a
