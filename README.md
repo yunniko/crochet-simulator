@@ -14,8 +14,9 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M9 done (of a 12-milestone plan — M10-M12 add collision-preventing
-contact on top of M9's real rope physics). **Live at
+M1–M10 done (of a 12-milestone plan — M11-M12 add collision-preventing
+contact on top of M9's real rope physics and M10's collision-detection
+primitive). **Live at
 https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
@@ -47,9 +48,10 @@ stitches get no capacity/ring geometric treatment; chains don't yet
 visually read as linked ovals in the renderer; a pending-target highlight
 can be visually masked when a bridge segment happens to retrace a
 stitch's own path; M9's DER bending covers stretch+bend only, not twist —
-deliberately deferred, see `HANDOVER.md`'s M9 entry; collision-preventing
-contact (M10-M12) is still ahead — self-intersections are flagged after
-the fact, not yet prevented during relaxation).
+deliberately deferred, see `HANDOVER.md`'s M9 entry; M10 added a tested
+continuous-collision-detection primitive (`core/src/ccd.rs`) but it isn't
+wired into the solve yet — self-intersections are still only flagged
+after the fact, not yet prevented during relaxation; that's M11-M12).
 
 ## Run locally
 

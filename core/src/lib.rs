@@ -5,6 +5,7 @@
 //! and the geometric invariants), and ../../GOALS.md for the milestone
 //! this crate is being built against.
 
+pub mod ccd;
 pub mod geometry;
 pub mod graph;
 pub mod path;

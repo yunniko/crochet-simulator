@@ -1222,6 +1222,82 @@ about the physics needs to distinguish it from an ordinary chain.
   deselects the tool (unavailable afterward, same as `mr`); selecting
   `CH` and placing a real chain unlocks every other kind in one step.
 
+**M10 done (2026-08-28): edge-edge Continuous Collision Detection
+primitive.** New `core/src/ccd.rs`, following the same architectural
+pattern `rod.rs` set for M9: pure geometry, no knowledge of the insertion
+graph or the relaxation loop, wired into the actual solver by a later
+milestone (M11) rather than here.
+
+- **The core algorithm** (`edge_edge_time_of_contact`): standard cloth/
+  rod-simulation CCD (Bridson et al.) — four points, each moving linearly
+  from a step's start position to its end position, are coplanar at time
+  `t` exactly when a cubic polynomial in `t` (the scalar triple product of
+  the edge vectors between them) vanishes. Every real root in `[0, 1]` is
+  a *candidate* crossing instant; each is checked against the actual
+  finite segments (via `closest_line_params`, an unclamped closest-
+  approach-between-two-lines solve, distinct from `validate.rs`'s own
+  clamped `segment_segment_distance` — different question, "where would
+  the lines meet" vs. "how close do the segments get") to confirm the
+  crossing genuinely lies within both segments, not just somewhere along
+  their infinite extensions.
+- **`real_roots_of_cubic`/`_quadratic`/`_linear`**: a general-purpose,
+  independently-tested real-root solver (depressed cubic + trigonometric/
+  Cardano method), degree-reducing through near-zero leading coefficients
+  rather than dividing by something numerically tiny. Verified against
+  known factored polynomials before ever being used for CCD — same
+  discipline as `rod.rs`'s `curvature_binormal` tests.
+- **A real transcription bug the tests caught, not just designed
+  around**: the discriminant-≈0 (repeated-root) branch used an unverified
+  formula on the first pass. A test against the known factored cubic
+  `(x-1)^2(x+2) = x^3-3x+2` immediately caught it — the wrong formula
+  returned `{-1, 2}` instead of the correct `{1, 1, -2}`. Re-derived from
+  the actual degenerate-Cardano identity and re-verified against the same
+  cubic. Left as a cautionary, permanent comment in the code: this is
+  exactly the class of silent sign/formula error that motivated choosing
+  finite differences over a hand-derived analytic gradient for M9's
+  bending force — here the analytic route was still the right call (no
+  finite-difference substitute exists for exact root-finding), so the
+  mitigation was rigorous testing against known cases instead, and it
+  did its job.
+- **A second real gap, also test-driven**: the first pass had no handling
+  for two edges that are *parallel* (not just coplanar) at a candidate
+  crossing time — `closest_line_params` correctly reports "no unique
+  intersection" there, but two segments sliding into exact overlap along
+  a shared line genuinely are colliding. Added `parallel_segments_overlap`
+  (collinearity check + 1D interval-overlap along the shared direction)
+  as a fallback specifically for that case; caught by a test where one
+  segment slides to become fully coincident with another.
+- **The always-coplanar-for-the-whole-step degenerate case** (every cubic
+  coefficient vanishes — needs suspiciously exact parallel motion, but
+  real relaxation dynamics can produce it, e.g. two segments both
+  confined to the same plane) has no isolated roots for the cubic
+  approach to find, since literally every `t` satisfies coplanarity.
+  Handled via a documented, explicitly-non-exhaustive sampling fallback
+  (checking a few fixed instants) rather than the full general treatment
+  a persistently-coplanar pair would need — a real, bounded scope
+  decision, same spirit as `rod.rs` deferring twist.
+- **Verified**: 17 new tests — synthetic hand-crafted pairs covering a
+  clean crossing, a near-miss outside the segment range, a shallow near-
+  parallel crossing (the case an ill-conditioned root-finder is most
+  likely to lose), already-touching-at-t=0, both persistently-coplanar
+  cases (crossing and non-crossing), and shared-vertex edges (confirmed
+  these correctly report touching *at* the shared vertex — deciding
+  that's expected rather than a defect is a caller-level policy question,
+  the same split `validate.rs`'s `segments_are_adjacent` already draws,
+  not this primitive's job) — plus one integration test running the
+  primitive across every segment pair of a real scheme's actual raw-to-
+  relaxed motion (the M9 ring-closure scheme, chosen for its known-large
+  single-step displacement), confirming no panics/NaN against genuinely
+  messy real geometry, not just hand-picked vectors. `cargo test
+  --workspace` (84 core + 6 wasm), clippy, fmt all clean.
+- **Deliberately not done here, per M10's own milestone scope**: wiring
+  this into `relax.rs`'s actual per-step solve loop (so a detected
+  crossing gets *prevented*, not just detected), or exposing it through
+  the wasm bridge — both are M11's explicit job ("segments that CCD
+  flags... get pushed apart... integrated into the XPBD solve"). No wasm
+  rebuild or redeploy for this milestone: nothing in the live app's
+  behavior changed, since nothing user-facing calls this yet.
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**
@@ -1273,11 +1349,16 @@ step would.
 - `core/` — Rust crate: an **insertion graph** of stitch instances (working
   order + insertion-target edges — see `docs/crochet-context.md` §4,
   `graph.rs`), an extensible stitch registry (§3a, `stitch.rs`), capacity-
-  aware raw placement geometry (§5a, `geometry.rs`, M1), a mass-spring
-  relaxation/elasticity solve with sibling repulsion (§6, §5a, `relax.rs`,
-  M2), continuous relaxed-path reconstruction (`path.rs`, M3), and
-  self-intersection/count validation on that path (§8, `validate.rs`, M3).
-  Pure Rust, unit-testable without any UI, no dependency on `wasm`/`web`.
+  aware raw placement geometry (§5a, `geometry.rs`, M1), a relaxation/
+  elasticity solve combining Hookean springs with sibling repulsion (§6,
+  §5a, `relax.rs`, M2) and genuine Discrete Elastic Rod bending
+  (`rod.rs`'s curvature-binormal math, wired into `relax.rs`, M9),
+  continuous relaxed-path reconstruction (`path.rs`, M3), self-
+  intersection/count validation on that path (§8, `validate.rs`, M3), and
+  a not-yet-wired-in continuous collision detection primitive
+  (`ccd.rs`, M10 — pure geometry today, M11's job to actually use it in
+  the solve). Pure Rust, unit-testable without any UI, no dependency on
+  `wasm`/`web`.
 - `wasm/` (M4, generalised M5) — thin `wasm-bindgen` crate: one exported
   `compute_scheme(wire)` taking whatever stitch graph the editor built (as
   plain JSON), running it through `core`'s exact pipeline, and serialising
@@ -1294,15 +1375,17 @@ step would.
 
 ## Next steps
 
-(Superseded — this note dates from just after M1; M2-M9 are all done, and
-M10-M12 are the current live scope. See `GOALS.md`'s milestone list and
-this file's M9-done entry above for the real current state.)
+(Superseded — this note dates from just after M1; M2-M10 are all done,
+and M11-M12 are the current live scope. See `GOALS.md`'s milestone list
+and this file's M10-done entry above for the real current state.)
 
-M9 (real DER bending, verified live on production) is done. Next: M10
-(continuous collision detection) → M11 (C-IPC-lite barrier contact) → M12
-(integration/full regression/redeploy). The `start_ch` stitch shipped
+M9 (real DER bending, verified live on production) and M10 (edge-edge CCD
+primitive) are done. Next: M11 (C-IPC-lite barrier contact — wiring
+`ccd.rs`'s output into `relax.rs`'s actual solve loop so a detected
+crossing gets prevented, not just detected) → M12 (integration/full
+regression/redeploy). The `start_ch` stitch shipped
 mid-milestone as a separate Owner-directed UX addition, unrelated to the
-M10-M12 physics work — no further action needed there unless the Owner
+M9-M12 physics work — no further action needed there unless the Owner
 asks for more.
 
 ## Domain reference

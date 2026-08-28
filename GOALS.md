@@ -1,14 +1,15 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M9 done. M10-M12 remain: a proper rope-physics rewrite (Discrete
+**M1-M10 done. M11-M12 remain: a proper rope-physics rewrite (Discrete
 Elastic Rods + collision-preventing contact) — the ring-closure bug
 traced back to the relaxation solver never having real bending
 resistance, and the Owner clarified this was the actually-agreed MVP
-scope, not a nice-to-have. M9 (real DER bending) is done and verified;
-M10 (CCD)/M11 (barrier contact)/M12 (integration/regression/redeploy)
-still open. A new `start_ch` stitch (2026-08-28, Owner-directed) also
-shipped mid-milestone — see progress log.**
+scope, not a nice-to-have. M9 (real DER bending) and M10 (edge-edge CCD
+primitive) are done and verified; M11 (barrier contact, wiring CCD into
+the actual solve)/M12 (integration/regression/redeploy) still open. A new
+`start_ch` stitch (2026-08-28, Owner-directed) also shipped mid-milestone
+— see progress log.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -152,7 +153,7 @@ sign-off before M1 starts):
       offsets, the dc/tr/dtr differential-pull demo) still holds after
       re-verification against the new solver — **met**, full account in
       the progress log and `HANDOVER.md`.
-- [ ] M10 — Continuous collision detection (CCD). Edge-edge time-of-
+- [x] M10 — Continuous collision detection (CCD). Edge-edge time-of-
       contact computation (coplanarity → cubic root-finding) between
       moving rod segments across a solve step, robust enough not to
       silently tunnel through near-parallel/near-coplanar edges (the
@@ -160,7 +161,11 @@ sign-off before M1 starts):
       CCD) — doesn't need the report's full exact-arithmetic machinery
       (TightCCD/Bernstein Sign Classification, Exact Root Parity) on the
       first pass, but must be validated against deliberately-adversarial
-      near-degenerate test cases, not just easy ones. Acceptance: given a
+      near-degenerate test cases, not just easy ones. **Done** — see
+      progress log for the full account, including a real transcription
+      bug the tests caught. Not yet wired into the actual relaxation
+      solve (that's M11's explicit job: using CCD's output to actually
+      prevent a crossing, not just detect one). Acceptance: given a
       scene where two segments are moving toward an intersection, the
       solver correctly detects the collision and its time, including
       near-parallel/near-coplanar cases that make naive root-finding
@@ -189,6 +194,62 @@ sign-off before M1 starts):
       solver's output), and redeploy.
 
 **Progress log** (newest first):
+- 2026-08-28 — **M10 done — edge-edge Continuous Collision Detection.**
+  New `core/src/ccd.rs`: `edge_edge_time_of_contact`, the classic
+  coplanarity-cubic CCD algorithm (four points moving linearly between a
+  step's start/end positions are coplanar exactly when a cubic polynomial
+  in `t` vanishes; each real root is then checked against the *actual*
+  finite segments, not just their infinite line extensions, since
+  coplanar-somewhere-in-space isn't the same as the two segments actually
+  meeting). Own robust real-cubic-root solver
+  (`real_roots_of_cubic`/`_quadratic`/`_linear`), degree-reducing through
+  near-zero leading coefficients rather than dividing by something tiny —
+  chosen and tested independently of the geometry it's used for, the same
+  "verify the math in isolation" discipline `rod.rs` used for
+  `curvature_binormal`.
+  **A real bug the tests caught, not just designed around**: the
+  degenerate discriminant-≈0 branch (a repeated root) used a wrong,
+  unverified formula on the first pass — caught immediately by a test
+  against a known factored cubic, `(x-1)^2(x+2)`, which the wrong formula
+  returned `{-1, 2}` for instead of the correct `{1, 1, -2}`; fixed by
+  deriving from the actual degenerate-Cardano identity and re-verifying
+  against the same known cubic. **A second real gap**, also test-driven:
+  the initial implementation had no handling for two edges that are
+  parallel (not just coplanar) at a candidate crossing time — `closest_
+  line_params` correctly reports "no unique intersection" for parallel
+  lines, but two segments sliding into exact overlap *are* a genuine
+  collision; added `parallel_segments_overlap` (collinearity check +
+  1D interval overlap along the shared line) as a fallback for exactly
+  that case, caught by a test where a segment slides to become fully
+  coincident with another. Also handles the fully-degenerate case where
+  two edges are coplanar for an *entire* step (every cubic coefficient
+  vanishes — needs suspiciously exact parallel motion, but real relaxation
+  dynamics can produce it, e.g. two segments confined to the same z=0
+  plane) via a documented, explicitly-non-exhaustive sampling fallback,
+  since the cubic-root approach has no isolated roots to offer when every
+  `t` satisfies the coplanarity condition.
+  Two test layers: synthetic hand-crafted edge pairs covering clean
+  crossings, near-misses-outside-segment-range, shallow near-parallel
+  crossings (the case an ill-conditioned root-finder is most likely to
+  lose), already-touching-at-t=0, persistently-coplanar-crossing and
+  -non-crossing, and shared-vertex edges (confirmed these correctly
+  report touching *at* the shared vertex — deciding that's "expected,
+  not a defect" is a caller-level policy question, the same split
+  `validate.rs`'s own `segments_are_adjacent` already draws, not this
+  primitive's job); plus an integration test running the primitive across
+  every segment pair of a real scheme's actual raw-to-relaxed motion (the
+  M9 ring-closure scheme, chosen for its known-large single-step
+  displacement) confirming no panics/NaN on genuinely messy real data,
+  not just hand-picked vectors. 17 new tests, `cargo test --workspace`
+  (84 core + 6 wasm), clippy, fmt all clean.
+  **Deliberately not done here**: wiring this into `relax.rs`'s actual
+  per-step solve loop, or exposing it through the wasm bridge — M10's own
+  milestone description scopes that to M11 ("segments that CCD flags...
+  get pushed apart... integrated into the XPBD solve"), matching the
+  existing `rod.rs`-to-`relax.rs` split (pure geometry module now, wired
+  into the solver as a distinct, later step). No wasm rebuild or redeploy
+  needed — nothing in the live app's behavior changed, since this isn't
+  called from anywhere user-facing yet.
 - 2026-08-28 — **New stitch: `start_ch` (Owner-directed).** Owner: "let's
   make a new stitch - starting chain," clarified across a few exchanges
   into a precise spec — a distinct foundation stitch (physically a clone
