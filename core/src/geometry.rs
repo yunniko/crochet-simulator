@@ -81,6 +81,30 @@ const POST_DEPTH_OFFSET: f64 = 0.7;
 /// by a back-loop-only row) with a near-miss against nearby geometry,
 /// the same class of issue `POST_DEPTH_OFFSET` needed fixing for.
 const LOOP_HALF_OFFSET: f64 = 0.5;
+/// M12: how much of a target's *own* gap to its neighbouring sibling
+/// (in its outer fan) an inner fan sharing that target is allowed to
+/// spend on its own angular spread, before falling back to
+/// `COMFORTABLE_ANGULAR_STEP`. This is the fix for the long-documented
+/// §5a "local density across different targets" limitation — raw
+/// placement used to fan every group of siblings at a fixed comfortable
+/// step with zero awareness of how close the *target itself* sits to a
+/// neighbouring target's own fan, so two dense, nearby fans (e.g. each
+/// round-1 stitch of a ring getting two round-2 children) could still
+/// start raw placement already overlapping, more than relaxation-time
+/// contact forces alone could resolve. 0.5 is conservative on purpose:
+/// the neighbouring target's own inner fan is claiming from the same
+/// gap too, so each side gets half rather than risking both sides
+/// reaching into the middle from opposite directions.
+const NEIGHBOR_ARC_SAFETY_FACTOR: f64 = 0.5;
+/// Floor on the neighbour-constrained angular step (see
+/// `NEIGHBOR_ARC_SAFETY_FACTOR`), so a genuinely tight neighbouring fan
+/// narrows a group's spread instead of collapsing it to near-zero width
+/// — a real "too many stitches for the room available" case should still
+/// read as visibly crowded (and be left for the relaxation/validation
+/// stages to actually confirm feasibility, per the Owner's "we need
+/// simulation, not verification" standard) rather than being silently
+/// squashed flat by this budget alone.
+const MIN_SIBLING_ANGULAR_STEP: f64 = 0.2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlacementError {
@@ -150,13 +174,19 @@ const COMFORTABLE_ANGULAR_STEP: f64 = 1.25;
 /// capacity/overflow split). `Elastic` and `TightenedRing` targets always
 /// wrap the full circle, at any size — they represent an isolated
 /// round/space, not an increase embedded in one.
-fn sibling_angle(style: CapacityStyle, index: usize, total: usize) -> f64 {
+/// Returns `(angle, step)`: this sibling's own angle, and the uniform
+/// per-sibling step used for the whole group (needed by a caller placing
+/// *this* stitch's own children later — see `NEIGHBOR_ARC_SAFETY_FACTOR`).
+/// `max_step` bounds the comfortable per-sibling step, normally
+/// `COMFORTABLE_ANGULAR_STEP` but narrowed when this group's target
+/// itself sits close to a neighbouring target's own fan.
+fn sibling_angle(style: CapacityStyle, index: usize, total: usize, max_step: f64) -> (f64, f64) {
     if total <= 1 {
-        return 0.0;
+        return (0.0, 0.0);
     }
-    let full_wrap = 2.0 * PI * index as f64 / total as f64;
+    let full_wrap_step = 2.0 * PI / total as f64;
     if style != CapacityStyle::Fixed {
-        return full_wrap;
+        return (full_wrap_step * index as f64, full_wrap_step);
     }
     // Compare against `total` steps, not `total - 1`: the fan's *last*
     // sibling and its wrap-around back to the first need at least one
@@ -165,10 +195,10 @@ fn sibling_angle(style: CapacityStyle, index: usize, total: usize) -> f64 {
     // just past 2*PI) would leave its two ends almost coincident instead
     // of comfortably spaced — caught by a real test at exactly 6 siblings
     // into a magic ring.
-    if total as f64 * COMFORTABLE_ANGULAR_STEP < 2.0 * PI {
-        COMFORTABLE_ANGULAR_STEP * index as f64
+    if total as f64 * max_step < 2.0 * PI {
+        (max_step * index as f64, max_step)
     } else {
-        full_wrap
+        (full_wrap_step * index as f64, full_wrap_step)
     }
 }
 
@@ -239,6 +269,14 @@ pub fn place_scheme(
 
     let mut placed: HashMap<StitchRef, PlacedStitch> = HashMap::new();
     let mut sibling_index: HashMap<StitchRef, usize> = HashMap::new();
+    // M12: records, per stitch, the (radius, per-sibling step, group size,
+    // absolute fan angle) its own placement used — looked up when placing
+    // *its* children, so their fan can be (a) budgeted against how close
+    // this stitch sits to its own neighbouring sibling (see
+    // `NEIGHBOR_ARC_SAFETY_FACTOR`) and (b) *oriented* to spread away from
+    // this stitch's own position on its own ring rather than in a fixed
+    // global direction — see the rotation below, and its doc comment.
+    let mut fan_context: HashMap<StitchRef, (f64, f64, usize, f64)> = HashMap::new();
     let mut out_threads: Vec<Vec<PlacedStitch>> = Vec::with_capacity(scheme.threads.len());
 
     for (thread_idx, thread) in scheme.threads.iter().enumerate() {
@@ -250,6 +288,12 @@ pub fn place_scheme(
                 .get(stitch.kind)
                 .ok_or(PlacementError::UnknownStitchKind(stitch.kind))?;
             let segments = def.path_segments().max(1);
+
+            // Populated by the `[single]` branch below with this stitch's
+            // own (radius, step, total) within its own group, so a later
+            // stitch targeting *this* one can budget its fan against it —
+            // see `fan_context` and `NEIGHBOR_ARC_SAFETY_FACTOR`.
+            let mut this_fan_context: Option<(f64, f64, usize, f64)> = None;
 
             let (base, top) = match stitch.targets.as_slice() {
                 [] => {
@@ -299,13 +343,56 @@ pub fn place_scheme(
                     sibling_index.insert(*single, index + 1);
 
                     let style = target_capacity_style(scheme, registry, *single)?;
-                    let angle = sibling_angle(style, index, total);
+                    let (radius_probe, _) = radius_and_wave(style, total, 0.0);
+                    // M12: if `single` itself sits in a fan (it was placed
+                    // as one of several siblings sharing its own target),
+                    // don't let this group's own spread reach past a
+                    // conservative share of the gap to `single`'s own
+                    // neighbouring sibling — see `NEIGHBOR_ARC_SAFETY_FACTOR`.
+                    let parent_angle = fan_context
+                        .get(single)
+                        .map(|(_, _, _, a)| *a)
+                        .unwrap_or(0.0);
+                    let max_step = fan_context
+                        .get(single)
+                        .filter(|(_, _, own_total, _)| *own_total > 1)
+                        .map(|(own_radius, own_step, _, _)| {
+                            let outer_gap = own_radius * own_step;
+                            if radius_probe > 1e-9 {
+                                let span = (total.saturating_sub(1)).max(1) as f64;
+                                (NEIGHBOR_ARC_SAFETY_FACTOR * outer_gap / (radius_probe * span))
+                                    .max(MIN_SIBLING_ANGULAR_STEP)
+                            } else {
+                                COMFORTABLE_ANGULAR_STEP
+                            }
+                        })
+                        .unwrap_or(COMFORTABLE_ANGULAR_STEP)
+                        .min(COMFORTABLE_ANGULAR_STEP);
+                    let (angle, step) = sibling_angle(style, index, total, max_step);
                     let (radius, z_wave) = radius_and_wave(style, total, angle);
                     // angle = 0 (the first/sole sibling) always lands at
                     // zero lateral offset, matching the pre-§5a behaviour
-                    // exactly — see `radius_and_wave`'s callers.
-                    let ring_offset =
-                        Vec3::new(radius * (angle.cos() - 1.0), radius * angle.sin(), z_wave);
+                    // exactly — see `radius_and_wave`'s callers. The raw
+                    // (unrotated) offset is computed in `single`'s own
+                    // local frame (angle measured from *its* fan's zero
+                    // direction), then rotated by `parent_angle` (M12) so
+                    // it spreads away from `single`'s own position on its
+                    // own ring instead of in a fixed global direction —
+                    // without this, a dense ring's several fans (e.g. every
+                    // round-1 stitch getting round-2 children) all bulge
+                    // the same way regardless of where each parent sits,
+                    // and neighbouring fans collide even when narrow. A
+                    // no-op (identity rotation) whenever `single` itself
+                    // wasn't part of a fan (`parent_angle == 0.0`), so
+                    // ordinary rows/chains are unaffected.
+                    let raw_x = radius * (angle.cos() - 1.0);
+                    let raw_y = radius * angle.sin();
+                    let ring_offset = Vec3::new(
+                        raw_x * parent_angle.cos() - raw_y * parent_angle.sin(),
+                        raw_x * parent_angle.sin() + raw_y * parent_angle.cos(),
+                        z_wave,
+                    );
+                    this_fan_context = Some((radius, step, total, parent_angle + angle));
 
                     let depth_offset = match stitch.loop_target {
                         LoopTarget::FrontPost => Vec3::new(0.0, POST_DEPTH_OFFSET, 0.0),
@@ -343,6 +430,9 @@ pub fn place_scheme(
             };
             let stitch_ref = StitchRef::new(thread_idx, i);
             prev_top = Some(placed_stitch.top);
+            if let Some(ctx) = this_fan_context {
+                fan_context.insert(stitch_ref, ctx);
+            }
             placed.insert(stitch_ref, placed_stitch.clone());
             out_thread.push(placed_stitch);
         }

@@ -619,9 +619,28 @@ objects.
   No timeline requested — noted so it doesn't get assumed already covered
   by the self-intersection checker (it isn't; that's a geometric check,
   this would be a graph-consistency one).
-- Local density across different targets (§5a): a dense round's several
-  increases can collide with a *neighbouring* increase, since placement
-  only reasons about siblings of the same target. M4's demo deliberately
-  stops at round 1 of a flat circle to avoid shipping a scheme that hits
-  this. No timeline requested — worth prioritising before M5's editor
-  lets an Owner build a real multi-round piece and hit it directly.
+- Local density across different targets (§5a): **substantially fixed in
+  M12.** The original problem stood as described here from M4 through
+  M11: a dense round's several increases could collide with a
+  *neighbouring* increase, because raw placement only reasoned about
+  siblings of the same target, and — the deeper root cause, only found
+  during M12's investigation — every fan's angular offset was computed in
+  a fixed global direction rather than rotated relative to its own
+  target's position, so nested fans (e.g. every round-1 stitch of a ring
+  getting its own round-2 children) all bulged the same way regardless of
+  where each parent sat on the ring. M12 fixed both: `geometry.rs`'s
+  `sibling_angle` now takes a neighbour-aware maximum step (narrowing a
+  fan's spread when its own target sits close to a neighbouring target's
+  fan, `NEIGHBOR_ARC_SAFETY_FACTOR`), and each fan's offset is rotated by
+  its parent's own accumulated fan angle instead of using a fixed global
+  basis. Verified: the round-1+round-2 density scenario that motivated
+  this fix went from 25 self-intersection violations to at most a
+  handful, all now isolated to a narrower, separately-understood
+  residual — the ring's own wrap-around seam, where the long
+  working-order bridge back to round-1's first target (to start round 2)
+  passes close to round-1's own last member's children; that bridge is
+  deliberately excluded from barrier contact (`BARRIER_MAX_SEGMENT_RATIO`,
+  M12) because treating ordinary long bridges as short segments caused
+  false positives elsewhere. Not claimed as fully, universally resolved —
+  see `HANDOVER.md`'s M12 entry for the honest current state and the
+  regression tests in `relax.rs`'s `density_regression_tests` module.

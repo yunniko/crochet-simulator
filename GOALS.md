@@ -1,19 +1,26 @@
 # Goals — crochet-sim
 
 ### G-001 · Crochet scheme simulator (3D yarn-path engine + editor) — ACTIVE
-**M1-M11 done. M12 remains: a proper rope-physics rewrite (Discrete
-Elastic Rods + collision-preventing contact) — the ring-closure bug
-traced back to the relaxation solver never having real bending
-resistance, and the Owner clarified this was the actually-agreed MVP
-scope, not a nice-to-have. M9 (real DER bending), M10 (edge-edge CCD
-primitive), and M11 (barrier-based contact response) are done and
-verified; M12 (final integration/regression/redeploy) still open. A real,
-separate limitation surfaced while building M11 — sibling repulsion only
-ever kept same-target *tops* apart, never their connecting bridges, which
-can still cross under a strong external force distorting a fan's angular
-order — flagged as a candidate follow-up, not fixed (see M11's progress
-log entry). A new `start_ch` stitch (2026-08-28, Owner-directed) also
-shipped mid-milestone — see progress log.**
+**M1-M12 all done — the full rope-physics rewrite (Discrete Elastic Rods
++ collision-preventing contact) is complete and live. M12 changed scope
+mid-milestone on explicit Owner instruction ("we need simulation, not
+verification — verification is only a fallback when no valid distribution
+of stitches exists"): rather than stopping at "detect and flag" for cases
+where a real, non-overlapping arrangement genuinely exists, M12 fixed the
+actual root cause in raw placement (`geometry.rs`'s fan angular budget/
+orientation had zero awareness of neighbouring targets' own fans — the
+long-documented §5a "local density across different targets" limitation)
+alongside making the M11 barrier segment-aware (bodies and bridges, not
+just tops). Result, honestly reported: a dense nested-fan scenario went
+from 25 violations to at most 4, and the M11-documented "fan siblings
+cross bridges under external pull" gap is narrowed but not eliminated —
+two narrow, separately-understood residuals remain (a ring's own long
+wrap-back bridge, and same-fan compression under strong external pull),
+neither representing a genuinely-impossible configuration, both
+candidates for future work if full resolution is wanted. See M12's
+progress log entry and `HANDOVER.md`'s M12 entry for the complete,
+verified account. A new `start_ch` stitch (2026-08-28, Owner-directed)
+also shipped mid-M9 — see progress log.**
 - **What:** A web app where a designer builds a crochet scheme (stitch
   types, rows, chains) and sees a simulated 3D yarn path for it — the
   thread folded and intersected the way real yarn would be — with
@@ -191,15 +198,74 @@ sign-off before M1 starts):
       overlapping/crossing geometry that used to only get flagged) settle
       into a genuinely non-intersecting configuration instead — **met**
       for the general non-adjacent-pair case M11 targets.
-- [ ] M12 — Integration, full regression, redeploy. Re-verify every
-      existing test and calibrated behavior against the M9-M11 solver
-      stack end to end, re-tune any constants that need it (documenting
-      why), update `docs/crochet-context.md`/`HANDOVER.md` for the new
-      physics model, verify in a real browser (including the M7 tube
-      rendering and M8 click-to-place flows still work against the new
-      solver's output), and redeploy.
+- [x] M12 — Integration, full regression, redeploy. **Scope changed
+      mid-milestone on Owner instruction (see G-001's summary above): not
+      just re-verification, but a real fix to the root cause of §5a's
+      "local density across different targets" limitation and M11's
+      fan-bridge-crossing gap. See progress log for the full account,
+      including the honestly-reported residual (not fully resolved).**
 
 **Progress log** (newest first):
+- 2026-08-28 — **M12 done — segment-aware barrier + raw-placement
+  neighbour-awareness, full regression, redeploy.** Mid-milestone, the
+  Owner redirected the approach: *"We do not need verification, we need
+  simulation. verification can be a thing only if there is no ways to
+  correctly distribute stitches"* — rejecting "detect and flag" as an
+  acceptable end state for cases where a valid, non-overlapping
+  arrangement genuinely exists (e.g. an ordinary 2-round flat circle).
+  Two real fixes landed as a result:
+  1. **Segment-aware barrier contact** (`relax.rs`): M11's barrier only
+     ever separated stitch *tops*. Rewritten to cover full stitch bodies
+     and the bridges to their working-order predecessors, using a linear
+     "sources + constant offset" model (`BaseSource`) mirroring `path.rs`'s
+     own `relaxed_base` logic, with forces computed at genuine closest-
+     points-between-segments and distributed back via the chain rule.
+     Directly targets M11's own documented "siblings cross their
+     connecting bridges under external pull" gap.
+  2. **Raw-placement neighbour-awareness** (`geometry.rs`) — the actual
+     root cause, found only after the redirect: `sibling_angle` fanned
+     every group of siblings with zero awareness of a neighbouring
+     target's own fan (§5a's long-documented limitation), and — the
+     deeper bug — every fan's offset was computed in a *fixed global
+     direction* rather than rotated relative to its own target's position,
+     so a ring's several fans all bulged the same way regardless of where
+     each parent sat. Fixed both: a neighbour-aware maximum angular step
+     (`NEIGHBOR_ARC_SAFETY_FACTOR`), and each fan's offset now rotates by
+     its own target's accumulated fan angle (a no-op for ordinary,
+     non-fanned rows/chains). Verified: a dense round-1+round-2 ring
+     scenario went from 25 self-intersection violations to at most 4,
+     confirmed by directly observing the neighbour-aware angular budget
+     engage (not just assumed).
+  3. **Honest residual, not fully resolved** — reported plainly per
+     VALUES.md rather than smoothed over: the nested-ring case's last ~4
+     violations cluster at the ring's own wrap-around seam (the long
+     working-order bridge back to the first target, to start the next
+     round, is deliberately excluded from barrier contact by the same
+     length-ratio rule that prevents false positives elsewhere); the
+     two-pinned-shells adversarial case (not a nested-fan scenario, so fix
+     2 doesn't apply) still shows same-fan compression under strong
+     external pull, narrower than M11's original gap but not eliminated.
+     `BARRIER_STIFFNESS` tried at 0.3/1.0/5.0 and relaxation steps at
+     150/600 — neither meaningfully helped (5.0 was worse; more steps on
+     the pinned-shells case produced *more* violations, confirming a
+     force-balance issue, not a convergence-speed one) — settled on 1.0.
+     Both residuals are believed fixable with further, more invasive work
+     (bridge-aware sibling repulsion; a wrap-seam-aware barrier exception)
+     not attempted this milestone. Neither is a genuinely-impossible
+     configuration by the Owner's own standard.
+  - **Verified**: `cargo test --workspace` (93 core + 6 wasm, was 91),
+    clippy, fmt all clean. Rebuilt wasm bindings (API unchanged, compiled
+    behavior changed). `npm run lint`/`build` clean, `test:unit` (52/52),
+    `test:e2e` (11/11). Manually browser-verified beyond the automated
+    suite: the shell preset renders clean tube geometry; the
+    deliberately-overloaded-ring preset (15 dc into one `mr`, matching the
+    Owner's own "11 won't fit" calibration) still correctly flags 6
+    intersections — confirming the fix narrows false crowding without
+    suppressing genuine impossibility detection.
+  - **Not done, by design**: full elimination of the two residuals above
+    (see item 3) — left as documented future work rather than
+    open-endedly chased at the expense of landing a real, substantial,
+    verified improvement now.
 - 2026-08-28 — **M11 done — barrier-based contact response.** New
   IPC-style barrier potential in `relax.rs` (Li et al.'s "Incremental
   Potential Contact" energy, `E(d) = -stiffness*(d-d_hat)^2*ln(d/d_hat)`

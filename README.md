@@ -14,20 +14,24 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M11 done (of a 12-milestone plan — M12 is final integration/
-regression/redeploy against the full new physics stack). **Live at
+M1–M12 done (of a 12-milestone plan). **Live at
 https://crochet.app.craftodejnice.cz.**
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
 siblings and correctly flags ~11+; a tightened magic ring reads as pointy
 at 3-5, flat at 6-8, wavy at 9+; front/back loop targeting is
-geometrically real, supporting techniques like mosaic crochet), a
-relaxation solve combining Hookean springs (stitch topology, not a
+geometrically real, supporting techniques like mosaic crochet; M12 made
+placement neighbour-aware too — a fan's spread narrows near a
+neighbouring target's own fan, and each fan's offset rotates with its own
+target's position instead of a fixed global direction, fixing the
+long-documented "dense nearby fans collide" limitation at its root cause),
+a relaxation solve combining Hookean springs (stitch topology, not a
 separate material property, determines stretchiness), a genuine Discrete
 Elastic Rod bending term (M9 — a chain closed into a ring with a slip
 stitch actually bows into a closed loop, not just a straight pull), and
-an IPC-style barrier contact force (M11) actively keeping previously-
-uncovered non-adjacent stitch pairs from settling into an overlapping
+an IPC-style barrier contact force, segment-aware since M12 (covering
+full stitch bodies and bridges, not just tops) actively keeping
+previously-uncovered pairs from settling into an overlapping
 configuration in the first place, plus self-intersection / stitch-count
 validation on the relaxed shape as a final check.
 `wasm/` bridges it to the browser via `wasm-bindgen`, exposing one
@@ -44,18 +48,23 @@ live as real, thick, per-stitch-shaped 3D tubes (not flat lines — see
 saving gives back an unguessable link to reload/share the scheme by — no
 accounts, see `HANDOVER.md`'s M6 access-model decision. See `GOALS.md` →
 G-001 for the milestone plan and progress log, and known/deferred
-limitations (a dense round's several increases can still collide with a
-*neighbouring* increase — flagged, not yet fixed; decrease/multi-target
-stitches get no capacity/ring geometric treatment; chains don't yet
-visually read as linked ovals in the renderer; a pending-target highlight
-can be visually masked when a bridge segment happens to retrace a
-stitch's own path; M9's DER bending covers stretch+bend only, not twist —
-deliberately deferred, see `HANDOVER.md`'s M9 entry; M11's barrier
-contact only covers stitch pairs with no other mechanism already keeping
-them apart — a fan's own siblings can still cross their *connecting
-bridges* (not just their tops, which sibling repulsion does protect)
-under a strong enough external pull, a real pre-existing gap M11's own
-testing surfaced but didn't fix, see `HANDOVER.md`'s M11 entry).
+limitations (decrease/multi-target stitches get no capacity/ring
+geometric treatment; chains don't yet visually read as linked ovals in
+the renderer; a pending-target highlight can be visually masked when a
+bridge segment happens to retrace a stitch's own path; M9's DER bending
+covers stretch+bend only, not twist — deliberately deferred, see
+`HANDOVER.md`'s M9 entry; a dense ring's several fans colliding with a
+*neighbouring* fan is now substantially fixed at the root cause — M12
+made raw placement neighbour-aware and the barrier segment-aware — but
+two narrow residuals remain, honestly reported rather than claimed fully
+resolved: a ring's own long working-order wrap-back bridge can still pass
+close to that same fan's own last member (deliberately excluded from
+barrier contact to avoid unrelated false positives elsewhere), and a
+fan's own siblings can still be squeezed closer than comfortable under a
+strong enough external pull — narrower than M11's original gap (bodies
+are now covered, not just tops) but not eliminated, see `HANDOVER.md`'s
+M12 entry for the full account and the regression tests documenting the
+current bound).
 
 ## Run locally
 

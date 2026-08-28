@@ -200,12 +200,14 @@ fn bending_energy_gradient(
     )
 }
 
-/// M11: barrier-based contact response (C-IPC-lite) — see GOALS.md's M11
-/// entry. Every pair of stitches that isn't already governed by a spring
-/// (continuity, insertion) or a dedicated repulsion pair (siblings, an
-/// `ss`'s target/predecessor) gets a smooth **barrier** potential: an
-/// IPC-style energy (Li et al., "Incremental Potential Contact") that is
-/// exactly zero — value *and* gradient — at or beyond
+/// M11/M12: barrier-based contact response (C-IPC-lite) — see GOALS.md's
+/// M11/M12 entries. Every pair of the scheme's *reconstructed yarn-path
+/// segments* (each stitch's own base-to-top body, and the bridge to its
+/// working-order predecessor — see `virtual_segments` below) that isn't
+/// structurally adjacent (a raw-coincident shared point — the same rule
+/// `validate.rs`'s own adjacency check uses) gets a smooth **barrier**
+/// potential: an IPC-style energy (Li et al., "Incremental Potential
+/// Contact") that is exactly zero — value *and* gradient — at or beyond
 /// `BARRIER_ACTIVE_DISTANCE`, and grows without bound as the pair
 /// approaches zero distance:
 /// `E(d) = -stiffness * (d - d_hat)^2 * ln(d / d_hat)` for `0 < d < d_hat`.
@@ -215,6 +217,26 @@ fn bending_energy_gradient(
 /// than risking a knock-on change to schemes the existing springs/
 /// repulsion/bending forces are already calibrated against.
 ///
+/// **Why segments, not just stitch tops (M12 revision).** M11's first cut
+/// only ever pushed apart the *tops* relax.rs tracks as free variables —
+/// real, but incomplete: the Owner's own framing is "we need simulation,
+/// not verification — verification is only a fallback for configurations
+/// that truly *can't* be distributed correctly." A top-only barrier can't
+/// deliver that, because a stitch's rendered *body* (base-to-top) and the
+/// *bridge* to its predecessor are both real yarn that can still cross
+/// even when every stitch's own top is comfortably placed — confirmed
+/// concretely on two real, previously-undiagnosed cases: (1) a fan's own
+/// siblings, pushed unevenly by an external force, can swap angular order
+/// and cross their connecting bridges even with `SIBLING_REPULSION_*`
+/// keeping their tops apart; (2) an ordinary two-round flat circle (ring +
+/// round 1 + a round-2 increase row — about as ordinary a scheme as this
+/// project has) already collides round-2 children of *neighbouring*
+/// round-1 targets via their bridges, a real M4-era limitation
+/// (docs/crochet-context.md §5a) that turned out to be the *same* root
+/// cause, not a separate one. Both are now covered by modelling the full
+/// path (see `BaseSource`/`Endpoint`/`virtual_segments` below), not by
+/// two separate patches.
+///
 /// **Why "barrier," not another linear spring**: a linear repulsion
 /// (like `SIBLING_REPULSION_STRENGTH` below) has *finite* force even at
 /// `d=0` — stiff enough forces and a long relaxation can still let a pair
@@ -222,9 +244,7 @@ fn bending_energy_gradient(
 /// nothing about the force shape itself prevents `d` from reaching zero.
 /// A barrier's force grows toward infinity as `d -> 0`, so it's not just
 /// discouraging closeness, it's actively unable to let genuine
-/// interpenetration become a *stable equilibrium* — matching M11's
-/// actual acceptance bar ("the relaxed shape itself never actually
-/// interpenetrates," not just "resists it a bit more").
+/// interpenetration become a *stable equilibrium*.
 ///
 /// **Scope, deliberately** (matching M9/M10's established pattern of
 /// honest, bounded engineering over the research-grade original): this
@@ -238,15 +258,28 @@ fn bending_energy_gradient(
 /// resolves deliberately-adversarial starting configurations (see this
 /// module's own `barrier_contact_tests`), not wired in as a live per-step
 /// gate limiting how far the solver is allowed to move in one step (the
-/// report's own conservative-step-size role for CCD). Given this
-/// solver's existing dt/damping are already tuned to keep steps modest
-/// (confirmed empirically: the barrier force alone is enough to resolve
-/// every adversarial case tried), a full CCD-gated line search was
-/// judged not worth the real added complexity for what it would buy
-/// here — a real, identified limitation, not an oversight, exactly the
-/// same honesty standard M9 held its own twist-deferral to.
+/// report's own conservative-step-size role for CCD) — a real, identified
+/// limitation, not an oversight, the same honesty standard M9 held its
+/// own twist-deferral to.
 const BARRIER_ACTIVE_DISTANCE: f64 = 0.3;
-const BARRIER_STIFFNESS: f64 = 0.3;
+const BARRIER_STIFFNESS: f64 = 1.0;
+
+/// A virtual segment is excluded from barrier contact for any step where
+/// its *current* length exceeds this multiple of its thread's own
+/// typical continuity-edge length — same mechanism, same reasoning, and
+/// (deliberately) the same ratio as `BENDING_MAX_EDGE_RATIO`: a row
+/// transition or a ring-closing join's bridge starts out running right
+/// through/alongside a straight raw chain (confirmed concretely — without
+/// this, the M2-era idempotency test failed: an *already-at-rest* scheme
+/// moved anyway, because its own row-transition bridge sat well within
+/// `BARRIER_ACTIVE_DISTANCE` of ordinary chain geometry it isn't actually
+/// touching, just running near). Re-checked every step against the
+/// *current* length, not just the raw one — a ring-closing bridge is
+/// *supposed* to shrink as the ring closes, and once it's back to
+/// ordinary length it should re-engage in barrier contact like any other
+/// segment, the same "live, not one-time" re-check `BENDING_MAX_EDGE_
+/// RATIO`'s own per-step guard already established.
+const BARRIER_MAX_SEGMENT_RATIO: f64 = BENDING_MAX_EDGE_RATIO;
 
 /// The IPC-style barrier energy for one pair at distance `d` — see
 /// `BARRIER_ACTIVE_DISTANCE`'s doc comment for the formula and why this
@@ -279,6 +312,223 @@ fn barrier_energy_derivative(d: f64, d_hat: f64, stiffness: f64) -> f64 {
     }
     let diff = d - d_hat;
     -stiffness * (2.0 * diff * (d / d_hat).ln() + diff * diff / d)
+}
+
+/// How close two of the barrier's virtual segments' *raw* endpoints must
+/// be to count as the same structural point (hence not a collision to
+/// resist) — the exact value `validate.rs`'s own `SAME_POINT_EPSILON`
+/// uses, for the same reason: this is deciding the identical question
+/// that module already answers for the final check, just applied to the
+/// solver's live segments instead of the finished ones.
+const SEGMENT_ADJACENCY_EPS: f64 = 1e-6;
+
+/// A stitch's relaxed **base** position, expressed as a live linear
+/// function of one or more *other* (or, for a thread's very first
+/// stitch, its own) tracked top positions, plus a fixed offset — mirrors
+/// `path.rs`'s own three-case `relaxed_base` computation exactly (zero
+/// targets: the working-order predecessor's top, or — for a thread's
+/// first stitch — a fixed offset from its own top, the M9 fix; one
+/// target: that target's top, offset by the target-relative raw base
+/// position; several targets: their tops' average, offset the same way),
+/// just kept in this "sources + constant" form instead of evaluated
+/// once, so the barrier below can recompute it fresh every step *and*
+/// distribute a force back through it via simple linear algebra (a
+/// weighted-average base moves by that same weighted average of however
+/// much its sources moved).
+struct BaseSource {
+    /// `(source stitch, weight)` pairs — weights sum to 1.0. Empty is
+    /// never produced (every case above has at least one source, even if
+    /// it's the stitch's own self for a thread's first, targetless
+    /// stitch).
+    sources: Vec<(StitchRef, f64)>,
+    /// `raw_base - sum(weight * raw_top(source))` — the part of the base
+    /// position that *doesn't* move with any tracked variable, computed
+    /// once from raw placement so it stays exactly consistent with
+    /// wherever `def.height()`/loop-target/post offsets etc. actually
+    /// placed this stitch's base in the first place.
+    constant_offset: Vec3,
+}
+
+/// A thread's typical raw working-order continuity-edge length (median,
+/// not mean — robust against the very outliers, like a row transition or
+/// a ring-closing join, this exists to help identify — see
+/// `BENDING_MAX_EDGE_RATIO`'s and `BARRIER_MAX_SEGMENT_RATIO`'s doc
+/// comments, the two places this feeds into). `None` when the thread has
+/// no real edges to measure (fewer than 2 stitches, or every stitch
+/// coincident).
+fn thread_typical_continuity_length(
+    raw: &crate::geometry::PlacedScheme,
+    thread_idx: usize,
+    thread_len: usize,
+) -> Option<f64> {
+    let mut edge_lengths: Vec<f64> = (1..thread_len)
+        .map(|i| {
+            raw.threads[thread_idx][i]
+                .top
+                .distance(&raw.threads[thread_idx][i - 1].top)
+        })
+        .filter(|d| *d > 1e-9)
+        .collect();
+    if edge_lengths.is_empty() {
+        return None;
+    }
+    edge_lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    Some(edge_lengths[edge_lengths.len() / 2])
+}
+
+fn compute_base_source(
+    scheme: &Scheme,
+    raw: &crate::geometry::PlacedScheme,
+    thread_idx: usize,
+    i: usize,
+) -> BaseSource {
+    let stitch = &scheme.threads[thread_idx].stitches[i];
+    let raw_base = raw.threads[thread_idx][i].base;
+    match stitch.targets.as_slice() {
+        [] => {
+            if i > 0 {
+                let prev = StitchRef::new(thread_idx, i - 1);
+                let raw_prev_top = raw.threads[thread_idx][i - 1].top;
+                BaseSource {
+                    sources: vec![(prev, 1.0)],
+                    constant_offset: raw_base - raw_prev_top,
+                }
+            } else {
+                let self_ref = StitchRef::new(thread_idx, i);
+                let raw_self_top = raw.threads[thread_idx][i].top;
+                BaseSource {
+                    sources: vec![(self_ref, 1.0)],
+                    constant_offset: raw_base - raw_self_top,
+                }
+            }
+        }
+        [single] => {
+            let raw_target_top = raw.threads[single.thread][single.index].top;
+            BaseSource {
+                sources: vec![(*single, 1.0)],
+                constant_offset: raw_base - raw_target_top,
+            }
+        }
+        multiple => {
+            let n = multiple.len() as f64;
+            let mut raw_sum = Vec3::ZERO;
+            let sources = multiple
+                .iter()
+                .map(|t| {
+                    raw_sum = raw_sum + raw.threads[t.thread][t.index].top;
+                    (*t, 1.0 / n)
+                })
+                .collect();
+            BaseSource {
+                sources,
+                constant_offset: raw_base - raw_sum * (1.0 / n),
+            }
+        }
+    }
+}
+
+/// One endpoint of a barrier virtual segment: either a stitch's own top
+/// (a directly-tracked free variable) or its base (a computed function of
+/// one or more other tops — see `BaseSource`).
+enum Endpoint {
+    Top(StitchRef),
+    Base(StitchRef),
+}
+
+fn endpoint_value(
+    endpoint: &Endpoint,
+    positions: &HashMap<StitchRef, Vec3>,
+    base_sources: &HashMap<StitchRef, BaseSource>,
+) -> Vec3 {
+    match endpoint {
+        Endpoint::Top(r) => positions[r],
+        Endpoint::Base(r) => {
+            let source = &base_sources[r];
+            source
+                .sources
+                .iter()
+                .fold(source.constant_offset, |acc, (src, weight)| {
+                    acc + positions[src] * *weight
+                })
+        }
+    }
+}
+
+/// Applies `force` at this endpoint back onto the underlying tracked
+/// variable(s) it's actually a function of — for a `Top`, directly; for a
+/// `Base`, split across its sources by the same weights that determine
+/// its position (the chain rule for a linear function: moving a source
+/// by `dx` moves a weighted average of it by `weight * dx`, so a force
+/// conjugate to the base's position distributes the same way).
+fn apply_force_to_endpoint(
+    endpoint: &Endpoint,
+    force: Vec3,
+    base_sources: &HashMap<StitchRef, BaseSource>,
+    forces: &mut HashMap<StitchRef, Vec3>,
+) {
+    match endpoint {
+        Endpoint::Top(r) => {
+            let existing = forces[r];
+            forces.insert(*r, existing + force);
+        }
+        Endpoint::Base(r) => {
+            for (src, weight) in &base_sources[r].sources {
+                let existing = forces[src];
+                forces.insert(*src, existing + force * *weight);
+            }
+        }
+    }
+}
+
+/// Closest points between two line segments `[p1,q1]` and `[p2,q2]`,
+/// returning `(distance, s, t)` where the closest points are
+/// `p1 + s*(q1-p1)` and `p2 + t*(q2-p2)`, `s`/`t` clamped to `[0,1]`.
+/// Same standard algorithm as `validate.rs`'s `segment_segment_distance`
+/// (Ericson, "Real-Time Collision Detection" §5.1.9) — that one only
+/// returns the distance, since that's all the discrete post-hoc checker
+/// needs; the barrier force below also needs `s`/`t` themselves, to know
+/// how to split a force at the closest point back onto each segment's
+/// two endpoints.
+fn closest_points_on_segments(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3) -> (f64, f64, f64) {
+    const EPS: f64 = 1e-12;
+    let d1 = q1 - p1;
+    let d2 = q2 - p2;
+    let r = p1 - p2;
+    let a = d1.dot(d1);
+    let e = d2.dot(d2);
+    let f = d2.dot(r);
+
+    let (s, t) = if a <= EPS && e <= EPS {
+        (0.0, 0.0)
+    } else if a <= EPS {
+        (0.0, (f / e).clamp(0.0, 1.0))
+    } else {
+        let c = d1.dot(r);
+        if e <= EPS {
+            (((-c) / a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let b = d1.dot(d2);
+            let denom = a * e - b * b;
+            let mut s = if denom.abs() > EPS {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let mut t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = ((-c) / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+            (s, t)
+        }
+    };
+
+    let c1 = p1 + d1 * s;
+    let c2 = p2 + d2 * t;
+    (c1.distance(&c2), s, t)
 }
 
 /// The continuity edge leading *into* a slip stitch uses this instead of
@@ -478,23 +728,11 @@ pub fn relax_scheme(
             continue;
         }
 
-        // The thread's own typical raw continuity-edge length (median,
-        // not mean — robust against the very outliers, like a row jump
-        // or a ring-closing join, this is meant to help identify). See
-        // `BENDING_MAX_EDGE_RATIO`'s doc comment.
-        let mut edge_lengths: Vec<f64> = (1..thread.stitches.len())
-            .map(|i| {
-                raw.threads[thread_idx][i]
-                    .top
-                    .distance(&raw.threads[thread_idx][i - 1].top)
-            })
-            .filter(|d| *d > 1e-9)
-            .collect();
-        if edge_lengths.is_empty() {
+        let Some(typical_length) =
+            thread_typical_continuity_length(&raw, thread_idx, thread.stitches.len())
+        else {
             continue;
-        }
-        edge_lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let typical_length = edge_lengths[edge_lengths.len() / 2];
+        };
         let max_edge_length = typical_length * BENDING_MAX_EDGE_RATIO;
 
         for i in 1..thread.stitches.len() - 1 {
@@ -575,37 +813,92 @@ pub fn relax_scheme(
         }
     }
 
-    // M11 barrier contact (see `BARRIER_ACTIVE_DISTANCE`'s doc comment):
-    // every pair *not* already governed by a spring or a dedicated
-    // repulsion pair above. Built as "every pair minus the ones already
-    // covered" rather than trying to enumerate barrier pairs directly,
-    // so nothing here can silently drift out of sync with what springs/
-    // `repulsion_pairs` end up covering as those evolve.
-    let canonical = |a: StitchRef, b: StitchRef| -> (StitchRef, StitchRef) {
-        if (a.thread, a.index) <= (b.thread, b.index) {
-            (a, b)
-        } else {
-            (b, a)
+    // M12: barrier contact against the *full reconstructed yarn path*
+    // (every stitch's own base-to-top body, and the bridge to its
+    // working-order predecessor), not just stitch tops — see
+    // `BARRIER_ACTIVE_DISTANCE`'s doc comment for why the earlier M11
+    // top-only version wasn't enough. `base_sources`/`virtual_segments`
+    // mirror `path.rs`'s own relaxed-base computation (same three cases:
+    // zero targets, one target, several) so this stays in lockstep with
+    // what the final validator actually checks, rather than a separately
+    // hand-maintained approximation that could drift out of sync with it.
+    let mut base_sources: HashMap<StitchRef, BaseSource> = HashMap::new();
+    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
+        for i in 0..thread.stitches.len() {
+            let r = StitchRef::new(thread_idx, i);
+            base_sources.insert(r, compute_base_source(scheme, &raw, thread_idx, i));
         }
-    };
-    let mut already_covered: std::collections::HashSet<(StitchRef, StitchRef)> = constraints
-        .iter()
-        .map(|c| canonical(c.a, c.b))
-        .chain(repulsion_pairs.iter().map(|&(a, b)| canonical(a, b)))
-        .collect();
-    // A stitch is never barrier-paired against itself, even though it's
-    // trivially "not otherwise covered" — the loop below only ever visits
-    // i<j from the same `refs` list so this never actually arises, but
-    // the intent is spelled out here rather than relying on that.
-    for r in &refs {
-        already_covered.insert((*r, *r));
     }
-    let mut barrier_pairs: Vec<(StitchRef, StitchRef)> = Vec::new();
-    for i in 0..refs.len() {
-        for j in (i + 1)..refs.len() {
-            let pair = canonical(refs[i], refs[j]);
-            if !already_covered.contains(&pair) {
-                barrier_pairs.push(pair);
+
+    // Every stitch contributes its own body (base -> top) and, from the
+    // second stitch of a thread onward, a bridge from its working-order
+    // predecessor's top to its own base. Raw endpoints are carried
+    // alongside for the adjacency test below — same convention
+    // `validate.rs`'s own `PathSegment` uses, and for the same reason:
+    // whether two points are *structurally* the same point is a fact
+    // about the graph, fixed at raw-placement time, not something that
+    // should change because relaxation moved things. `max_length` (see
+    // `BARRIER_MAX_SEGMENT_RATIO`) flags a segment that's an unusually
+    // long structural bridge for its own thread (a row transition, a
+    // ring-closing join) — raw placement lays these out running right
+    // through/alongside other, unrelated geometry (a straight chain's own
+    // continuation, before anything has curled into its final relaxed
+    // shape), which a plain distance check can't tell apart from a real
+    // collision.
+    let mut virtual_segments: Vec<(Endpoint, Endpoint, Vec3, Vec3, f64)> = Vec::new();
+    for (thread_idx, thread) in scheme.threads.iter().enumerate() {
+        let max_length = thread_typical_continuity_length(&raw, thread_idx, thread.stitches.len())
+            .map(|typical| typical * BARRIER_MAX_SEGMENT_RATIO)
+            .unwrap_or(f64::INFINITY);
+        for i in 0..thread.stitches.len() {
+            let r = StitchRef::new(thread_idx, i);
+            let raw_top = raw.threads[thread_idx][i].top;
+            let raw_base = raw.threads[thread_idx][i].base;
+            virtual_segments.push((
+                Endpoint::Base(r),
+                Endpoint::Top(r),
+                raw_base,
+                raw_top,
+                max_length,
+            ));
+            if i > 0 {
+                let prev = StitchRef::new(thread_idx, i - 1);
+                let raw_prev_top = raw.threads[thread_idx][i - 1].top;
+                virtual_segments.push((
+                    Endpoint::Top(prev),
+                    Endpoint::Base(r),
+                    raw_prev_top,
+                    raw_base,
+                    max_length,
+                ));
+            }
+        }
+    }
+
+    // A pair of (virtual) segments is excluded from barrier contact when
+    // they share a raw endpoint — this is deliberately the *same* rule
+    // `validate.rs`'s `segments_are_adjacent` uses for the exact same
+    // reason (see that module's own docs): whether two points are
+    // structurally "the same point" (a stitch's base *is* its target's
+    // top; two siblings' bases *are* the same shared target) is a graph
+    // fact, decided once from raw placement, not something relaxation
+    // should ever need to fight. Anything the final checker would exempt
+    // as structural, the solver now also leaves alone — anything it
+    // wouldn't, the solver actively keeps apart during settling instead
+    // of only finding out afterward. Precomputed once: raw positions
+    // never change across steps. (The length-based exclusion is checked
+    // separately, dynamically, every step — see the main loop below.)
+    let mut segment_pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..virtual_segments.len() {
+        for j in (i + 1)..virtual_segments.len() {
+            let (_, _, a_raw_start, a_raw_end, _) = &virtual_segments[i];
+            let (_, _, b_raw_start, b_raw_end, _) = &virtual_segments[j];
+            let adjacent = a_raw_start.distance(b_raw_start) < SEGMENT_ADJACENCY_EPS
+                || a_raw_start.distance(b_raw_end) < SEGMENT_ADJACENCY_EPS
+                || a_raw_end.distance(b_raw_start) < SEGMENT_ADJACENCY_EPS
+                || a_raw_end.distance(b_raw_end) < SEGMENT_ADJACENCY_EPS;
+            if !adjacent {
+                segment_pairs.push((i, j));
             }
         }
     }
@@ -696,26 +989,50 @@ pub fn relax_scheme(
             forces.insert(b, fb + push);
         }
 
-        for &(a, b) in &barrier_pairs {
-            let pa = positions[&a];
-            let pb = positions[&b];
-            let delta = pb - pa;
-            let dist = delta.length();
+        for &(i, j) in &segment_pairs {
+            let (a0, a1, _, _, a_max_length) = &virtual_segments[i];
+            let (b0, b1, _, _, b_max_length) = &virtual_segments[j];
+            let pa0 = endpoint_value(a0, &positions, &base_sources);
+            let pa1 = endpoint_value(a1, &positions, &base_sources);
+            let pb0 = endpoint_value(b0, &positions, &base_sources);
+            let pb1 = endpoint_value(b1, &positions, &base_sources);
+
+            // Live re-check (not just at raw) — see
+            // `BARRIER_MAX_SEGMENT_RATIO`'s doc comment for why an
+            // unusually long segment for its thread gets skipped, and why
+            // this has to be checked against the *current* length every
+            // step rather than decided once.
+            if pa0.distance(&pa1) > *a_max_length || pb0.distance(&pb1) > *b_max_length {
+                continue;
+            }
+
+            let (dist, s, t) = closest_points_on_segments(pa0, pa1, pb0, pb1);
             if !(1e-9..BARRIER_ACTIVE_DISTANCE).contains(&dist) {
                 continue; // exactly zero beyond d_hat, by construction — see the barrier's own doc comment.
             }
-            let dir = delta * (1.0 / dist);
+            let pa = pa0 + (pa1 - pa0) * s;
+            let pb = pb0 + (pb1 - pb0) * t;
+            let dir = (pb - pa) * (1.0 / dist);
             let derivative =
                 barrier_energy_derivative(dist, BARRIER_ACTIVE_DISTANCE, BARRIER_STIFFNESS);
-            // Force on `a` = -d(energy)/d(pa) = derivative * dir (see the
-            // barrier's own doc comment for the sign derivation); `dir`
-            // points a -> b, and `derivative` is negative for d < d_hat,
-            // so this correctly pushes `a` *away* from `b`.
+            // Force at the closest point on segment `a` = derivative *
+            // dir (same sign derivation as the barrier's own doc
+            // comment); `dir` points a -> b, and `derivative` is
+            // negative for d < d_hat, so this pushes the closest point
+            // on `a` *away* from `b`. That force is then distributed
+            // back onto `a`'s two endpoints by the closest point's own
+            // barycentric weight (`1-s` toward `a0`, `s` toward `a1`) —
+            // standard virtual-work force splitting for a point
+            // parametrised linearly along a segment — and, since each
+            // endpoint may itself be a computed `base` (a weighted
+            // combination of one or more *other* stitches' tops, not a
+            // free variable of its own), `apply_force_to_endpoint`
+            // carries that split through the chain rule one more level.
             let force_on_a = dir * derivative;
-            let fa = forces[&a];
-            let fb = forces[&b];
-            forces.insert(a, fa + force_on_a);
-            forces.insert(b, fb - force_on_a);
+            apply_force_to_endpoint(a0, force_on_a * (1.0 - s), &base_sources, &mut forces);
+            apply_force_to_endpoint(a1, force_on_a * s, &base_sources, &mut forces);
+            apply_force_to_endpoint(b0, force_on_a * (-(1.0 - t)), &base_sources, &mut forces);
+            apply_force_to_endpoint(b1, force_on_a * (-t), &base_sources, &mut forces);
         }
 
         for r in &refs {
@@ -1200,6 +1517,122 @@ mod barrier_contact_tests {
             tunnelled.is_empty(),
             "expected no mid-relaxation tunnelling between the two shells, found: {:?}",
             tunnelled
+        );
+    }
+}
+
+/// M12: regression coverage for the raw-placement fix to §5a's long-
+/// documented "local density across different targets" limitation (see
+/// `geometry.rs`'s `NEIGHBOR_ARC_SAFETY_FACTOR`/fan-rotation doc comments).
+/// Neither scenario here is fully clean — both are honestly reported as
+/// known, narrow residual limitations in HANDOVER.md/GOALS.md's M12 entry
+/// — but both are dramatically better than before the fix, and these
+/// tests exist to catch a *regression* back toward the old numbers, not
+/// to claim full resolution.
+#[cfg(test)]
+mod density_regression_tests {
+    use super::*;
+    use crate::graph::{StitchInstance, Thread};
+    use crate::path::relaxed_yarn_segments;
+    use crate::stitch::{DC, MR};
+    use crate::validate::{check_self_intersections, DEFAULT_YARN_DIAMETER};
+
+    /// A 6-stitch round-1 ring where every round-1 stitch gets 2 round-2
+    /// children (18 stitches total) — the scenario that first exposed the
+    /// "every fan bulges the same fixed global direction regardless of
+    /// where its own target sits on the ring" bug. Before the M12
+    /// raw-placement fix (neighbour-aware angular budget +
+    /// per-parent-angle rotation in `geometry.rs`), this produced 25
+    /// self-intersection violations; after, it produces at most a handful,
+    /// all clustered at the ring's own wrap-around seam (round-1's last
+    /// member's own children vs. the long working-order bridge back to
+    /// round-1's first member to start round 2) — a distinct, narrower,
+    /// separately-understood limitation: that bridge is deliberately
+    /// excluded from barrier contact (`BARRIER_MAX_SEGMENT_RATIO`) because
+    /// treating it as an ordinary short segment produced false positives
+    /// elsewhere, so it isn't pushed away from geometry it passes close to.
+    #[test]
+    fn nested_round_density_is_far_better_than_pre_m12_baseline() {
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(MR, vec![]));
+        for _ in 0..6 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![StitchRef::new(0, 0)]));
+        }
+        for i in 1..=6 {
+            for _ in 0..2 {
+                thread
+                    .stitches
+                    .push(StitchInstance::new(DC, vec![StitchRef::new(0, i)]));
+            }
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+        let params = RelaxationParams::default();
+        let relaxed = relax_scheme(&scheme, &registry, &params).unwrap();
+        let segments = relaxed_yarn_segments(&scheme, &registry, &relaxed).unwrap();
+        let report = check_self_intersections(&segments, DEFAULT_YARN_DIAMETER);
+        assert!(
+            report.violations.len() <= 4,
+            "expected the M12 raw-placement fix's improvement to hold \
+             (pre-fix baseline was 25 violations); got {} — a regression: {:?}",
+            report.violations.len(),
+            report.violations
+        );
+    }
+
+    /// Two independent 5-dc shells, pinned artificially close together
+    /// (1.3 units apart) to stress-test contact under strong external
+    /// pull — not a nested-fan case (the shells share no common ancestor
+    /// fan), so the M12 raw-placement fix doesn't apply here; this is the
+    /// M11-documented "a fan's own siblings can still cross under a
+    /// strong enough external pull" limitation, narrowed (M12's
+    /// segment-aware barrier now also covers stitch *bodies*, not just
+    /// tops) but not eliminated — same-target siblings squeezed together
+    /// by the pull toward the other shell can still end up closer than
+    /// `DEFAULT_YARN_DIAMETER`. Kept as a regression guard, not a claim
+    /// of resolution.
+    #[test]
+    fn two_pinned_close_shells_do_not_regress_past_the_m12_baseline() {
+        let registry = StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        thread.stitches.push(StitchInstance::new(MR, vec![]));
+        for _ in 0..5 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![StitchRef::new(0, 0)]));
+        }
+        thread
+            .stitches
+            .push(StitchInstance::new(crate::stitch::CH, vec![]));
+        thread.stitches.push(StitchInstance::new(MR, vec![]));
+        for _ in 0..5 {
+            thread
+                .stitches
+                .push(StitchInstance::new(DC, vec![StitchRef::new(0, 7)]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+        let mut pinned = HashMap::new();
+        pinned.insert(StitchRef::new(0, 0), Vec3::new(0.0, 0.0, 0.0));
+        pinned.insert(StitchRef::new(0, 6), Vec3::new(0.65, 1.5, 0.0));
+        pinned.insert(StitchRef::new(0, 7), Vec3::new(1.3, 0.0, 0.0));
+        let params = RelaxationParams {
+            pinned,
+            ..RelaxationParams::default()
+        };
+        let relaxed = relax_scheme(&scheme, &registry, &params).unwrap();
+        let segments = relaxed_yarn_segments(&scheme, &registry, &relaxed).unwrap();
+        let report = check_self_intersections(&segments, DEFAULT_YARN_DIAMETER);
+        assert!(
+            report.violations.len() <= 5,
+            "expected at most the known M11/M12 residual (same-fan \
+             compression under strong external pull); got {} violations \
+             — investigate before raising this bound: {:?}",
+            report.violations.len(),
+            report.violations
         );
     }
 }
