@@ -118,8 +118,9 @@ pub struct PlacedStitch {
     pub base: Vec3,
     /// Where this stitch's yarn path ends — what later stitches target.
     pub top: Vec3,
-    /// Approximate polyline through this stitch, subdivided per
-    /// `StitchDef::path_segments` (docs §3: more pre-wraps -> more points).
+    /// This stitch's real yarn-loop path (M14, `crate::yarn_shape`) — a
+    /// chain link's own loop, or a post's shaft with one real loop per
+    /// pull-through stage — not a straight line from `base` to `top`.
     pub path: Vec<Vec3>,
 }
 
@@ -277,6 +278,12 @@ pub fn place_scheme(
     // this stitch's own position on its own ring rather than in a fixed
     // global direction — see the rotation below, and its doc comment.
     let mut fan_context: HashMap<StitchRef, (f64, f64, usize, f64)> = HashMap::new();
+    // M16: which direction *this* stitch's own children should grow in —
+    // see the `[single]` branch below for the full reasoning. Needed so a
+    // non-fanned continuation (an ordinary row, or a lone stitch into a
+    // ring) can inherit its target's own growth direction instead of
+    // defaulting back to a fixed axis every single stitch.
+    let mut growth_axes: HashMap<StitchRef, Vec3> = HashMap::new();
     let mut out_threads: Vec<Vec<PlacedStitch>> = Vec::with_capacity(scheme.threads.len());
 
     for (thread_idx, thread) in scheme.threads.iter().enumerate() {
@@ -287,13 +294,18 @@ pub fn place_scheme(
             let def = registry
                 .get(stitch.kind)
                 .ok_or(PlacementError::UnknownStitchKind(stitch.kind))?;
-            let segments = def.path_segments().max(1);
 
             // Populated by the `[single]` branch below with this stitch's
             // own (radius, step, total) within its own group, so a later
             // stitch targeting *this* one can budget its fan against it —
             // see `fan_context` and `NEIGHBOR_ARC_SAFETY_FACTOR`.
             let mut this_fan_context: Option<(f64, f64, usize, f64)> = None;
+            // M16: the direction *this* stitch's own children should grow
+            // in — see `growth_axes` and the `[single]` branch below.
+            // Defaults to a fixed "up" (matches every branch that isn't a
+            // fanned sibling: a zero-target foundation stitch, or a
+            // decrease with no meaningful single direction to inherit).
+            let mut this_growth_axis = Vec3::new(0.0, 0.0, 1.0);
 
             let (base, top) = match stitch.targets.as_slice() {
                 [] => {
@@ -394,6 +406,73 @@ pub fn place_scheme(
                     );
                     this_fan_context = Some((radius, step, total, parent_angle + angle));
 
+                    // M16: which direction *this* stitch's own post
+                    // actually grows in — the fix for a real, structural
+                    // problem, not a rendering one: `top` used to always
+                    // be `base + (0,0,height)`, a fixed global "up"
+                    // regardless of what the stitch was part of. That's
+                    // why a flat magic-ring round rendered as a bouquet of
+                    // vertical spikes instead of a flat disc (the Owner's
+                    // own reference photo of real sc/hdc/dc rounds) — in
+                    // real crochet, a flat round stays flat because each
+                    // round's *height* converts into *radial* growth (the
+                    // disc's own radius increasing round to round), not
+                    // altitude above the disc; Gauss-Bonnet is the same
+                    // relationship the research doc's geodesic-slicing
+                    // section describes (`dC/dc = 2π - ∫K dA`) — a flat
+                    // disc has zero Gaussian curvature, which only holds
+                    // if growth stays in-plane. A fanned sibling (`total >
+                    // 1` — an actual round/increase, not a single plain
+                    // continuation) grows *radially*: `(cos, sin, 0)` of
+                    // its own absolute angle around the shared target
+                    // (the same angle `ring_offset` above already uses,
+                    // rotated the same way by `parent_angle`) — well-
+                    // defined even for the first sibling (`angle == 0`),
+                    // since the angle itself is meaningful even though
+                    // `ring_offset` happens to be zero there by
+                    // construction. A *non*-fanned continuation
+                    // (`total == 1` — an ordinary row, or a lone stitch
+                    // into a ring) has no angle to be radial *about*, so
+                    // it inherits its target's own growth direction
+                    // instead — this is what keeps an ordinary row's
+                    // stitches all growing the same consistent way
+                    // (row-to-row), and is a no-op back to the original
+                    // fixed-Z behaviour for the common case (a plain row
+                    // off a foundation chain, whose own growth axis is the
+                    // default straight-Z below).
+                    //
+                    // Purely radial only holds up to `COMFORTABLE_CAPACITY`
+                    // siblings — a real, calibrated *boundary*, not a
+                    // gradient (docs §5a: "seven is hard but possible,
+                    // eleven won't fit" — the Owner's own line, not a
+                    // gradual transition). Up to it, real yarn can radiate
+                    // every sibling outward from the shared insertion
+                    // point while staying flat (a comfortable fan reads as
+                    // a flat rosette, matching the Owner's reference
+                    // photo); beyond it, it physically can't — it ripples
+                    // into 3D instead, exactly what `overflow_wave`
+                    // already models for *position*. Switching the growth
+                    // axis outright to straight-up past the boundary is
+                    // the same physical story applied to *direction*.
+                    // Confirmed this needed to be a hard boundary, not a
+                    // smooth blend by overflow ratio: a blended version
+                    // still gave 11 siblings sharing one stitch enough
+                    // radial reach to validate cleanly, silently erasing
+                    // the Owner's own "won't fit" calibration.
+                    let absolute_angle = parent_angle + angle;
+                    this_growth_axis = if total > 1 {
+                        if total <= COMFORTABLE_CAPACITY {
+                            Vec3::new(absolute_angle.cos(), absolute_angle.sin(), 0.0)
+                        } else {
+                            Vec3::new(0.0, 0.0, 1.0)
+                        }
+                    } else {
+                        growth_axes
+                            .get(single)
+                            .copied()
+                            .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+                    };
+
                     let depth_offset = match stitch.loop_target {
                         LoopTarget::FrontPost => Vec3::new(0.0, POST_DEPTH_OFFSET, 0.0),
                         LoopTarget::BackPost => Vec3::new(0.0, -POST_DEPTH_OFFSET, 0.0),
@@ -402,23 +481,42 @@ pub fn place_scheme(
                         LoopTarget::Both => Vec3::ZERO,
                     };
                     let base = target_top + ring_offset + depth_offset;
-                    let top = base + Vec3::new(0.0, 0.0, def.height());
+                    let top = base + this_growth_axis * def.height();
                     (base, top)
                 }
                 multiple => {
                     // Decrease: base is the average of every target's top.
                     // Capacity/ring modelling (§5a) doesn't apply here —
-                    // out of scope for this round, see HANDOVER.
+                    // out of scope for this round, see HANDOVER. Growth
+                    // axis: the average of the targets' own directions
+                    // (falling back to straight up if that average
+                    // degenerates to zero, e.g. two exactly opposite
+                    // targets) — a decrease continues *roughly* the same
+                    // direction its targets were already growing in,
+                    // same inheritance idea as an ordinary `[single]`
+                    // continuation above.
                     let mut sum = Vec3::ZERO;
+                    let mut axis_sum = Vec3::ZERO;
                     for target in multiple {
                         let target_top = placed
                             .get(target)
                             .ok_or(PlacementError::TargetNotYetPlaced(*target))?
                             .top;
                         sum = sum + target_top;
+                        axis_sum = axis_sum
+                            + growth_axes
+                                .get(target)
+                                .copied()
+                                .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
                     }
                     let base = sum * (1.0 / multiple.len() as f64);
-                    let top = base + Vec3::new(0.0, 0.0, def.height());
+                    let normalized_axis = axis_sum.normalized();
+                    this_growth_axis = if normalized_axis.length() > 1e-9 {
+                        normalized_axis
+                    } else {
+                        Vec3::new(0.0, 0.0, 1.0)
+                    };
+                    let top = base + this_growth_axis * def.height();
                     (base, top)
                 }
             };
@@ -426,13 +524,14 @@ pub fn place_scheme(
             let placed_stitch = PlacedStitch {
                 base,
                 top,
-                path: linspace(base, top, segments),
+                path: crate::yarn_shape::build_stitch_curve_points(base, top, def),
             };
             let stitch_ref = StitchRef::new(thread_idx, i);
             prev_top = Some(placed_stitch.top);
             if let Some(ctx) = this_fan_context {
                 fan_context.insert(stitch_ref, ctx);
             }
+            growth_axes.insert(stitch_ref, this_growth_axis);
             placed.insert(stitch_ref, placed_stitch.clone());
             out_thread.push(placed_stitch);
         }
@@ -463,13 +562,6 @@ fn target_capacity_style(
         .get(target_instance.kind)
         .ok_or(PlacementError::UnknownStitchKind(target_instance.kind))?;
     Ok(def.capacity_style)
-}
-
-fn linspace(a: Vec3, b: Vec3, segments: u32) -> Vec<Vec3> {
-    let n = segments.max(1);
-    (0..=n)
-        .map(|i| a + (b - a) * (i as f64 / n as f64))
-        .collect()
 }
 
 #[cfg(test)]
@@ -818,7 +910,15 @@ mod tests {
     }
 
     #[test]
-    fn taller_stitch_has_more_evenly_spaced_path_segments() {
+    fn taller_stitch_has_a_real_multi_loop_path_not_a_straight_line() {
+        // M14: a stitch's raw `path` is now built by `yarn_shape` (real
+        // loop topology — see that module's own tests for the math), not
+        // a straight-line `linspace`. This just confirms `place_scheme`
+        // actually wires that in: a dtr (3 pull-through stages) should
+        // have far more points than the old 4-point straight line, and
+        // its path length should be well beyond the straight-line
+        // base-to-top distance (a real loop travels much further than
+        // its own chord).
         let registry = StitchRegistry::with_uk_basics();
         let mut thread = Thread::new();
         thread.stitches.push(StitchInstance::new(CH, vec![]));
@@ -830,15 +930,13 @@ mod tests {
 
         let placed = place_scheme(&scheme, &registry).unwrap();
         let dtr = &placed.threads[0][1];
-        // dtr: 2 pre-wraps -> 3 path segments -> 4 points.
-        assert_eq!(dtr.path.len(), 4);
-        let lengths: Vec<f64> = dtr.path.windows(2).map(|w| w[0].distance(&w[1])).collect();
-        for pair in lengths.windows(2) {
-            assert!(
-                (pair[0] - pair[1]).abs() < 1e-9,
-                "segments should be equal length: {:?}",
-                lengths
-            );
-        }
+        assert!(
+            dtr.path.len() > 10,
+            "expected a real multi-loop path, got {} points",
+            dtr.path.len()
+        );
+        let straight_line_distance = dtr.base.distance(&dtr.top);
+        let path_length: f64 = dtr.path.windows(2).map(|w| w[0].distance(&w[1])).sum();
+        assert!(path_length > straight_line_distance * 1.15);
     }
 }

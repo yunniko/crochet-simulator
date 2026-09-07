@@ -10,13 +10,17 @@ import { placeChains } from "./helpers";
 //
 // Builds its scheme via the M8 tool-palette + render-click flow
 // (placeChains — chains only, since the click position doesn't matter
-// for `ch` — see helpers.ts), not the old form; the app already starts
-// empty by default (M8), so there's no need to Clear first.
+// for `ch` — see helpers.ts), not the old form. Since 2026-08-30 (G-002)
+// the app starts with a real starting rope already placed (see
+// lib/starting-rope.ts), not an empty scheme, so each test clears it
+// first to get the small, deterministic stitch counts these assertions
+// depend on.
 
 test("saving a scheme updates the URL and share link, and reloading it round-trips the scheme", async ({
   page,
 }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "Clear" }).click();
   await placeChains(page, 1);
 
   await page.getByTestId("scheme-name-input").fill("e2e persistence test");
@@ -44,6 +48,7 @@ test("saving a scheme updates the URL and share link, and reloading it round-tri
 
 test("saving again on an already-saved scheme overwrites it in place, not a new link", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "Clear" }).click();
   await placeChains(page, 1);
   await page.getByTestId("save-button").click();
   await expect(page).toHaveURL(/\/s\/[a-z0-9]{12}$/);

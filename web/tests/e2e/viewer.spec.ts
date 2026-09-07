@@ -3,85 +3,66 @@ import { expect, test } from "@playwright/test";
 import { clickEmptyCorner, clickNearOrigin, clickUntil } from "./helpers";
 
 // M8: the editor is a direct-manipulation, click-on-the-render tool
-// palette, not a form — the app starts empty (a plain starting yarn stub,
-// no scheme yet) and every stitch is placed by selecting a tool and
-// clicking the 3D view. Asserts via data-testid hooks on the tool
-// palette / pending-target hint / stats — not on canvas pixels (see
-// HANDOVER.md's note on the screenshot-timing quirk from verifying the
-// 3D render manually) — except where a click genuinely has to land on
-// the render itself, which uses canvas-relative *fractions*, not raw
-// pixels (see ./helpers.ts), so it survives a differently-sized test
-// viewport.
+// palette, not a form. Since 2026-08-30 (G-002) the app starts with a
+// real, simulated long chain already placed (STARTING_ROPE — see
+// lib/starting-rope.ts) rather than an empty canvas or a preset picker —
+// presets were removed entirely. "Clear" still resets to a true empty
+// scheme (start_ch/mr only) for building entirely from scratch. Asserts
+// via data-testid hooks on the tool palette / pending-target hint / stats
+// — not on canvas pixels (see HANDOVER.md's note on the screenshot-timing
+// quirk from verifying the 3D render manually) — except where a click
+// genuinely has to land on the render itself, which uses canvas-relative
+// *fractions*, not raw pixels (see ./helpers.ts), so it survives a
+// differently-sized test viewport.
 
-test("starts empty, with only start_ch and mr available", async ({ page }) => {
+test("starts with a long, real simulated rope already placed", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (0)");
+  // 24 ch + 1 ss (looping back to stitch 0) + 6 more ch, see
+  // lib/starting-rope.ts — a real scheme computed by the same core
+  // pipeline as anything else, not a decorative placeholder.
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (31)");
   await expect(page.locator("canvas")).toBeVisible();
-  await expect(page.getByTestId("tool-start_ch")).toBeEnabled();
-  await expect(page.getByTestId("tool-mr")).toBeEnabled();
-  // ch itself is no longer available as the very first stitch — start_ch
-  // is (see lib/tool-placement.ts).
-  for (const kind of ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr"]) {
-    await expect(page.getByTestId(`tool-${kind}`)).toBeDisabled();
-  }
-});
-
-test("loading the flat-circle preset validates clean", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Flat circle (round 1)" }).click();
-
-  await expect(page.getByTestId("stat-stitches")).toHaveText("7");
+  await expect(page.getByTestId("stitch-24")).toContainText("ss -> [0]");
   await expect(page.getByTestId("stat-status")).toHaveText("OK");
+
+  // A real chain already exists, so every kind is available immediately —
+  // unlike the true-empty state, which only allows start_ch/mr.
+  await expect(page.getByTestId("tool-dc")).toBeEnabled();
+  await expect(page.getByTestId("tool-ch")).toBeEnabled();
+  await expect(page.getByTestId("tool-mr")).toBeDisabled();
+  await expect(page.getByTestId("tool-start_ch")).toBeDisabled();
 });
 
-test("switching to the overloaded ring preset shows it flagged", async ({ page }) => {
+test("Clear returns to a true empty state, with only start_ch and mr available", async ({ page }) => {
   await page.goto("/");
-
-  await page.getByRole("button", { name: "Overloaded ring (flagged)" }).click();
-
-  await expect(page.getByTestId("stat-stitches")).toHaveText("16");
-  await expect(page.getByTestId("stat-status")).toContainText("Flagged");
-});
-
-test("the freeform spike preset (non-row targeting) validates clean", async ({ page }) => {
-  await page.goto("/");
-
-  await page.getByRole("button", { name: "Freeform spike (non-row)" }).click();
-
-  await expect(page.getByTestId("stat-stitches")).toHaveText("5");
-  // Stitch 4 targets stitch 0 (not its immediate predecessor, stitch 3) —
-  // the concrete evidence this scheme really isn't row-based.
-  await expect(page.getByTestId("stitch-4")).toContainText("dc -> [0]");
-  await expect(page.getByTestId("stat-status")).toHaveText("OK");
-});
-
-test("clearing a loaded preset returns to the empty starting state", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Flat circle (round 1)" }).click();
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (7)");
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (31)");
 
   await page.getByRole("button", { name: "Clear" }).click();
 
   await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (0)");
+  await expect(page.getByTestId("tool-start_ch")).toBeEnabled();
   await expect(page.getByTestId("tool-mr")).toBeEnabled();
-  // The last scheme's stats must not linger once there's nothing to
-  // compute — a real bug caught while building this milestone (a Clear
-  // left a stale "Flagged" reading on screen).
+  for (const kind of ["ch", "ss", "dc", "htr", "tr", "dtr", "trtr", "quad_tr"]) {
+    await expect(page.getByTestId(`tool-${kind}`)).toBeDisabled();
+  }
+  // The rope's stats must not linger once there's nothing to compute — a
+  // real bug caught while building M8's original Clear flow.
   await expect(page.getByTestId("stat-stitches")).toBeHidden();
 });
 
 test("remove last undoes the most recent stitch", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Flat circle (round 1)" }).click();
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (31)");
 
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (7)");
   await page.getByRole("button", { name: "Remove last" }).click();
-  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (6)");
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (30)");
 });
 
 test("building a scheme by selecting tools and clicking the render, start to finish", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "Clear" }).click();
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (0)");
 
   // start_ch ignores what it hits — any click on the canvas places one
   // (see clickNearOrigin's own comment) — this is what actually exercises
@@ -125,6 +106,9 @@ test("decrease mode: a target click stays pending until confirmed, instead of pl
   page,
 }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "Clear" }).click();
+  await expect(page.getByTestId("stitch-count")).toHaveText("Stitches (0)");
+
   // start_ch, then a real ch (not mr): a lone mr's rendered geometry
   // turned out too small/point-like for clickUntil's sparse grid search
   // to reliably land on (confirmed: consistently missed within its

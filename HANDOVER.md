@@ -508,7 +508,7 @@ import that wrapper, never call `dynamic` themselves.
 `when-we-meet`'s exact shape (`deps`/`build`/`runtime` stages, one-shot
 `migrate` service via `prisma migrate deploy`, `--profile app` opt-in) —
 picked app port 30020 and Postgres port 54322 (next free in each range
-per `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s registry; **not yet verified
+per `E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`'s registry; **not yet verified
 free on the live host**, that's a live-deploy-time check, not a docs-time
 one). Deliberately does **not** touch the Rust/WASM toolchain — the image
 build assumes `web/lib/wasm/*` (wasm-bindgen's generated output) is
@@ -585,7 +585,7 @@ like this one, but when they do, only a real fresh-clone deploy catches
 it.
 
 **Deployed for real (2026-08-27), following
-`E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern.** This project
+`E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`'s standard pattern.** This project
 had never been pushed anywhere — required two Owner-authorized detours
 before the deploy itself could happen, both logged here since they'll
 recur for any future Company project set up the same way:
@@ -1150,7 +1150,7 @@ honest stopgap): replaced it with a genuine DER bending term computed from
   server): reproduced the Owner's exact original report (6 chains, then
   `ss -> [0]`) — closes into a genuine loop, `Status: OK`. Committed
   (`c6c37f9`), pushed, redeployed via the standard
-  `INFRASTRUCTURE.md` pattern; confirmed every other container on the
+  `INFRASTRUCTURE_DEPLOY.md` pattern; confirmed every other container on the
   shared host (`when-we-meet`, `listing-studio`, `parley`, Grafana)
   unaffected (`docker ps` uptimes unchanged, all still respond).
 - **What M9 does *not* include, honestly**: twist (the material frame's
@@ -1487,6 +1487,129 @@ honestly-reported residual.
   detection, which is exactly the distinction the Owner's redirect asked
   for.
 
+**G-002 M2 done, technical work (2026-08-30) — real loop-topology core
+rewrite + flat-disc growth-axis fix.** After G-001 shipped correct
+placement/physics but stitches still looked like generic tubes, G-002's
+first pass (client-side "wiggle" shapes in `web/lib/yarn-shape.ts`,
+rendering-layer only, per M1's original constraint) was tried and
+rejected twice by the Owner as still not reading as real crochet. The
+Owner then authorized dropping that constraint entirely — *"It would be
+ok even if we will need to rewrite the whole codebase, we need real
+simulation"* — leading to a real architectural move: **loop-through-loop
+topology now lives in `core/src/yarn_shape.rs`** (a new module, 11 unit
+tests), feeding both raw placement (`geometry.rs`'s `PlacedStitch.path`)
+and relaxed reconstruction (`path.rs`), not just the renderer.
+`relax.rs`'s M12 barrier contact was extended from coarse straight
+segments to the same fine-grained real curves (`CollisionUnit`, broad-
+phase filtered so the full suite stays under 1 second). `web/lib/
+yarn-shape.ts` shrank from ~334 lines of shape generation to ~70 lines
+of pure segment-grouping, now a thin consumer of `core`'s real geometry
+rather than a shape generator of its own.
+A second, distinct fix landed in the same milestone after the Owner
+shared a real reference photo of flat magic-ring rounds and asked what
+the model was missing: every stitch's height used to grow along a fixed
+global +Z, which cannot produce a flat disc (a flat round has zero
+Gaussian curvature — Gauss-Bonnet, from the Owner's earlier-shared
+reference document — which requires growth to stay in-plane/radial for a
+fanned round, not add altitude). Fixed with a per-stitch `growth_axes`
+map in `geometry.rs`: fanned siblings grow radially
+(`(cos(angle), sin(angle), 0)`) up to `COMFORTABLE_CAPACITY`, then a hard
+cutoff reverts to straight-up growth for overloaded fans (a smooth blend
+was tried first and rejected — it broke the existing "11 won't fit"
+capacity calibration). Two real regressions surfaced and were fixed by
+actually re-running the full suite, not assumed away: the capacity
+calibration (fixed by the hard cutoff) and the single most basic demo
+scheme (`mr` + 6 `dc`) itself, whose return bridges needed more than the
+previous 150-step relaxation budget to fully separate under the new
+geometry (`RelaxationParams::default().steps` raised to 300, verified by
+sweeping 150/300/600/1200 and confirming 300+ fully resolves it).
+**Verified in full**: `cargo test --workspace` (103 passed, 1 known
+failure — the pre-existing mosaic residual below), `cargo test -p
+crochet-wasm` explicitly (6/6, catches what the workspace command alone
+would miss — see the `cargo test --workspace` early-stop gotcha noted in
+`GOALS.md`'s M2 entry), clippy/fmt clean, wasm bindings rebuilt, `npm run
+lint`/`build`/`test:unit` (46/46)/`test:e2e` (11/11) clean, and all four
+presets manually re-verified in a real browser after the rebuild (flat
+circle now a genuinely flat, radiating rosette with `Status: OK`;
+overloaded ring still correctly flagged; shell and freeform-spike both
+OK). **Not done**: the Owner's own visual sign-off on the result (this
+goal's actual acceptance criterion) — screenshots sent, not yet reviewed
+as of this entry; a decision on the pre-existing, unrelated mosaic
+residual (`mosaic_style_back_loop_row_with_front_loop_spike_does_not_
+false_positive`, 3 violations, root-caused as a genuine chain-loop-size
+vs. back-loop-offset structural interaction, plateaued across every
+tuning attempt tried both before and after this milestone); and commit/
+push/redeploy (everything above is local-only, uncommitted, pending the
+Owner's go-ahead per the standing escalation rule for anything leaving
+the workspace).
+
+**G-003 M1 done, technical work (2026-08-30) — presets removed, real
+starting rope, camera auto-fit.** The Owner rejected the preset-button
+starting experience outright — *"We have problem with you not
+understanding a geometry or a whole system we are building. Let's remove
+all presets and start over. I want that on application start there were a
+long bendy rope was present for start"* — and separately laid down a
+standing instruction that reaches beyond this one goal: *"There will be
+nothing decorative in this project. We are building a real-time
+simulation. Do not use shortcuts for that unless it directly requested"*
+(saved to memory; applies to any future visual feature in this project).
+**Presets removed entirely**: `web/lib/presets.ts` deleted, the header
+button row and `EditorApp.tsx`'s `loadScheme` helper removed;
+`wasm/src/lib.rs`'s preset-branded test helpers/tests removed, with the
+one test carrying independently valuable coverage (wire-format parsing
+produces a correct scheme) kept under a neutral name plus a new neutral
+test preserving the "flagging works through the wire bridge" coverage.
+**Real starting rope** (`web/lib/starting-rope.ts`): the app's default
+`stitches` state is now 24 `ch` + 1 `ss` looping back to stitch 0 (reusing
+M9's already-proven chain-closes-into-a-ring mechanism, just longer and
+asymmetric) + 6 more `ch` continuing as a free tail — genuine simulated
+yarn, not a rendering-layer curve. The first design (a 16-stitch tail)
+actually self-intersected (6 real violations) — caught by the same
+validator every scheme goes through, not a special case — and was fixed
+by shortening the tail, exactly the kind of thing a decorative shortcut
+would never have caught. The old decorative empty-state stub
+(`YarnViewer.tsx`'s `StartingYarnStub`) is gone too — a genuinely empty
+scheme (reached via Clear) now renders nothing, per the "nothing
+decorative" instruction.
+**A real camera-framing gap, found and fixed**: the long-standing fixed
+`camera={{ position: [4, 4, 6] }}` was tuned for small demo schemes and
+left most of the new rope outside the view frustum. New `CameraFit`
+component computes a real bounding sphere from the actual segment points
+and fits the camera to it, re-fitting only on the empty→non-empty
+transition so it doesn't yank the view away from the Owner mid-build.
+**A fully-diagnosed rendering-environment quirk**, worth recording so it
+isn't rediscovered from scratch: in this session's remote/automated
+Chrome testing environment specifically, `CameraFit`'s computation runs
+correctly from the very first frame (confirmed via direct in-page
+inspection), but the canvas doesn't visibly repaint until a genuine DOM
+pointer event occurs (click, hover, or scroll) — reproduced identically
+regardless of whether the fit was driven by `useEffect`, `useFrame`, an
+explicit `frameloop="always"`, or a forced extra render, and resolved
+instantly the moment any real mouse input was dispatched. Diagnosed as
+Chrome deprioritizing canvas repaints for a tab it doesn't consider
+genuinely focused in this automation context — not an app defect; real
+human-operated browser tabs don't throttle `requestAnimationFrame` this
+way, and Playwright's own e2e suite (driving real mouse clicks throughout)
+never showed it. Ineffective speculative fixes were removed rather than
+left as dead code.
+**A real, load-dependent e2e flake**, also honestly documented rather than
+hidden: the starting rope is now computed once on every page load (the
+old empty start triggered zero computation), so running the full e2e
+suite at this machine's full auto-detected worker count (6) occasionally
+times out mid-`clickUntil` under heavy contention — 100% reliable at
+`--workers=1`/`--workers=2`, and covered in real CI by the existing
+`retries: 2`. Deliberately not fixed by shrinking the rope, which would
+trade away the actual requested feature for local test throughput.
+**Verified**: full workspace Rust suite (103/104, only the pre-existing
+unrelated mosaic residual), `cargo test -p crochet-wasm` (5/5 after the
+preset-test rework), clippy/fmt clean, `npm run lint`/`build` clean,
+`test:unit` (46/46), `test:e2e` (8/8 at `--workers=2`). Manually browser-
+verified: the rope renders as a genuinely long, visibly bent/looped piece
+of yarn, correctly framed, `Status: OK`; Clear reaches a true empty scene.
+**Not yet done**: Owner's own visual sign-off (this goal's actual
+acceptance criterion); commit/push/redeploy, pending that sign-off and
+explicit go-ahead per the standing escalation rule.
+
 ## Decision record
 
 **D1 — Standalone web app, not a Blender plugin (2026-08-24).**
@@ -1507,7 +1630,7 @@ potentially thousands of stitches). Options considered:
   `when-we-meet` are both Next.js/TypeScript/Prisma/Postgres web apps —
   see `E:\CLAUDE\COMPANY\STANDARDS.md` "minimize spread"), reuses the same
   Vitest+Playwright test setup and the same Docker/nginx deploy pattern
-  documented in `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`, and Rust-to-WASM is
+  documented in `E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`, and Rust-to-WASM is
   a well-trodden path for browser-side geometry/physics work. Rust's
   ownership model also suits a geometry kernel with lots of shared curve
   data and no GC pauses during simulation.
@@ -1553,8 +1676,17 @@ step would.
   bounded against how close its own target sits to a neighbouring
   target's fan, and each fan's offset is rotated relative to its own
   target's position instead of a fixed global direction — see M12's
-  progress-log entry for why this mattered. Pure Rust, unit-testable
-  without any UI, no dependency on `wasm`/`web`.
+  progress-log entry for why this mattered. **G-002 M2** added
+  `yarn_shape.rs`: real loop-through-loop curve construction (a chain is
+  one continuous loop pulled through the previous one; a post is a shaft
+  plus one bar-loop per real yarn-over/pull-through stage) that both
+  `geometry.rs` (raw placement) and `path.rs` (relaxed reconstruction)
+  build each stitch's actual path from — this is genuine stitch geometry,
+  not a physics abstraction with a cosmetic overlay on top, and
+  `geometry.rs` also tracks a per-stitch `growth_axes` map so a fanned
+  round's height grows radially (flat, zero-Gaussian-curvature discs)
+  instead of always straight up. Pure Rust, unit-testable without any UI,
+  no dependency on `wasm`/`web`.
 - `wasm/` (M4, generalised M5) — thin `wasm-bindgen` crate: one exported
   `compute_scheme(wire)` taking whatever stitch graph the editor built (as
   plain JSON), running it through `core`'s exact pipeline, and serialising
@@ -1564,39 +1696,67 @@ step would.
 - `web/` (M4 minimal viewer, M5 real editor) — Next.js/TypeScript app: a
   `SchemeEditor` component for building the insertion graph stitch by
   stitch (kind, targets, loop target, capacity override), a react-three-
-  fiber 3D viewport of the live-relaxed shape, a stats readout, and a
-  preset library (`lib/presets.ts`) of starting-point schemes including a
-  non-row-based one — confirms the model/editor genuinely isn't row-locked
-  per D4 below, not just in the core engine but end-to-end through the UI.
+  fiber 3D viewport of the live-relaxed shape, and a stats readout. The
+  model/editor genuinely isn't row-locked per D4 below — a non-row-based
+  scheme is a fully ordinary case, not a special one — proven end-to-end
+  through the UI as well as the core engine.
+  **Since G-002 M2**, `lib/yarn-shape.ts` is a thin ~70-line consumer of
+  `core`'s real per-stitch loop geometry (segment grouping into strands
+  only) — it no longer generates any stitch shape itself, see D11 below.
+  **Since G-003 M1**, there is no preset picker (`lib/presets.ts` is gone,
+  see D12) — the app's `stitches` state instead defaults to
+  `lib/starting-rope.ts`'s real, computed long chain, and `YarnViewer.tsx`
+  gained a `CameraFit` component that auto-frames the camera to whatever
+  geometry actually exists (see D12 and G-003's `GOALS.md` entry for the
+  rendering-environment quirk this surfaced).
 
 ## Next steps
 
-(Superseded — this note dates from just after M1; M2-M12 are all done.
-See `GOALS.md`'s milestone list and this file's M12-done entry above for
-the real current state.)
+(Superseded twice — this note dates from just after M1. G-001's M2-M12
+are all done and live on production; G-002's M1-M2 status is below.)
 
-M9-M12 (the full rope-physics rewrite: real DER bending, CCD, segment-
-aware barrier contact, and the M12 raw-placement neighbour-awareness fix)
-are all done, verified, and live on production. What's left is exactly
-the honestly-reported residual from M12's own entry, not a new milestone:
-(a) the ring-wrap-seam residual (a fan's own long working-order bridge
-back to its first target passes close to that same fan's own last
-member's children — currently excluded from barrier contact by the
-length-ratio rule that's needed elsewhere to avoid false positives; a
-real fix likely needs either a wrap-aware exception to that exclusion, or
-treating the long bridge as several shorter virtual segments instead of
-one), and (b) the pre-existing, M11-documented "a fan's own siblings can
-still cross under strong external pull" limitation, narrowed by M12
-(bodies now covered, not just tops) but not eliminated for the most
-adversarial pinned-close case — a real fix likely needs bridge-aware
-sibling repulsion or a way of preserving a fan's angular ordering under
-perturbation. Neither blocks ordinary use (the automated preset/e2e suite
-and manual browser check both confirm normal schemes, including dense
-multi-round ones, work correctly); both are candidates for a future
-milestone if the Owner wants full resolution rather than the current
-"dramatically improved, honestly residual" state. The `start_ch` stitch
-shipped mid-M9 as a separate Owner-directed UX addition, unrelated to the
-M9-M12 physics work.
+**G-001 (physics/placement engine)**: fully done and live, with two
+honestly-reported, non-blocking residuals from M12 — (a) a ring's own
+long working-order wrap-back bridge passes close to that same fan's last
+member (excluded from barrier contact by a length-ratio rule needed
+elsewhere), and (b) a fan's own siblings can still be squeezed under
+strong external pull in the most adversarial pinned-close case. Neither
+blocks ordinary use; both are candidates for future work if the Owner
+wants full resolution. See M12's entry above for the complete account.
+
+**G-002 (stitch visual realism)**: M1's rendering-layer shapes were tried
+and rejected; M2's core rewrite (real loop topology in `core`, plus the
+flat-disc growth-axis fix) is technically complete and fully verified —
+see the G-002 M2 entry above — but **not yet reviewed by the Owner**, so
+not committed, pushed, or redeployed. Immediate next steps, in order:
+1. Get the Owner's visual sign-off on the corrected geometry (fresh
+   screenshots already sent as of this entry).
+2. Get direction on the still-open, pre-existing `mosaic_style_back_loop_
+   row_with_front_loop_spike_does_not_false_positive` residual (accept as
+   a documented limitation, or invest further tuning/structural work).
+3. Once approved: commit (with the standing per-commit git-email
+   override), then push/redeploy following
+   `E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`'s standard pattern — only after
+   explicit Owner confirmation, per the charter's standing escalation
+   rule for anything leaving the workspace.
+4. Beyond `dc`, the other postable kinds (`htr`/`tr`/`dtr`/`trtr`/
+   `quad_tr`) inherit the same `yarn_shape.rs` machinery automatically
+   (bar count already derives from each `StitchDef`'s own `pre_wraps`/
+   `draw_through`), but per this goal's acceptance criteria they still
+   need their own explicit Owner visual review, not just an assumption
+   that "the math generalizes" is the same as "it looks right."
+
+**G-003 (starting experience: real rope, no presets)**: M1's technical
+work (presets removed, real starting rope, camera auto-fit) is complete
+and fully verified — see the G-003 M1 entry above — but **not yet
+reviewed by the Owner**, so not committed, pushed, or redeployed.
+Immediate next steps mirror G-002's: get the Owner's visual sign-off
+(screenshots already sent as of this entry), then commit/push/redeploy
+together with G-002's work once both are approved, since they're both
+uncommitted changes to the same working tree right now.
+
+The `start_ch` stitch shipped mid-G-001-M9 as a separate Owner-directed
+UX addition, unrelated to any of G-001/G-002/G-003's main threads of work.
 
 ## Domain reference
 
@@ -1694,6 +1854,132 @@ thing that varies by convention is an ordinary property of the *next*
 stitch after the turn (which earlier point it targets), already covered by
 the general insertion-target mechanism — no chain-specific rule needed
 anywhere in the engine. See `docs/crochet-context.md` §3/§4/§8 invariant 2.
+
+**D11 — Real stitch-loop topology moved into `core`; it is not a
+rendering-layer overlay (2026-08-30, Owner-directed).** G-002 originally
+scoped realistic stitch shapes as rendering-only (M7's established
+boundary: `core`/`wasm`'s placement/physics stay the straight-post
+abstraction; only `web/lib/yarn-shape.ts` would draw something prettier
+on top). Two rounds of client-side shape iteration under that constraint
+were both rejected by the Owner as still not reading as real crochet.
+When the Owner then said *"It would be ok even if we will need to rewrite
+the whole codebase, we need real simulation,"* the alternative considered
+was staying rendering-layer-only and iterating further on the cosmetic
+curve math; rejected because the actual problem was structural, not
+cosmetic — a rendering overlay can only draw a plausible-looking curve
+between two points `core` already decided were connected by a straight
+post, it can never make validation or relaxation *reason about* the real
+loop geometry (loop size vs. neighbour spacing, real bar-to-bar contact),
+which is exactly the kind of thing self-intersection checking and barrier
+contact exist to get right. Chose instead to move the loop-through-loop
+math itself into `core/src/yarn_shape.rs`, consumed by both raw placement
+and relaxation physics, with `web/`'s renderer reduced to a thin consumer
+of that real geometry. Trade-off accepted deliberately: this is
+substantially more invasive than a rendering tweak (it touched
+`geometry.rs`, `path.rs`, `relax.rs`, and `validate.rs`'s adjacency rule,
+and required re-tuning several existing calibrated constants), but it's
+the only way for the simulation to actually be "real" per the Owner's own
+stated bar, rather than looking real from one camera angle while the
+underlying physics still reasons about an idealized post. A second,
+related decision landed in the same milestone: stitch height growth was
+changed from a fixed global vertical axis to a per-stitch tracked
+`growth_axes` direction (radial for fanned rounds, up to a hard capacity
+cutoff) — needed because a flat magic-ring round is only physically
+flat (zero Gaussian curvature, Gauss-Bonnet) if growth stays in-plane;
+a fixed vertical axis structurally cannot produce a flat disc no matter
+how the rest of the geometry is tuned. See `GOALS.md`'s G-002 M2 entry
+for the full verification account.
+
+**D12 — The app's starting scene is a real computed scheme, not a
+decorative placeholder; presets are gone entirely (2026-08-30,
+Owner-directed).** The preset-button picker (M5) and the plain 2-point
+`StartingYarnStub` (M8) were both, in their own way, exactly the kind of
+thing the Owner's standing instruction rules out: *"There will be nothing
+decorative in this project... do not use shortcuts unless it directly
+requested."* The alternative considered for the starting-rope request was
+a hand-authored decorative curve in `YarnViewer.tsx` (cheap, zero risk of
+self-intersection since it's never actually validated) — rejected for the
+same reason D11 rejected a rendering-only fix: it would look bendy without
+being real, which is precisely the gap between "looks like crochet" and
+"is crochet" this project keeps being redirected back to. Chose instead to
+compose the rope from real stitch primitives (`ch` + one `ss` self-join)
+run through the exact same `compute_scheme` pipeline as anything else —
+which is *why* the first design's self-intersection (a 16-stitch tail
+crossing back through the loop) was caught at all: a decorative curve
+can't fail validation because it never touches the validator. Also removed
+the `StartingYarnStub` fallback for a genuinely empty scheme (reached via
+Clear) — it now renders nothing, rather than a small straight decorative
+tube, for the same reason.
+
+**D13 — Domain-grounding review added as a standing gate, not a one-off
+(2026-09-07, Owner-directed).** Owner observation: this project's repeated
+"still doesn't read as real crochet" cycles (see G-002's progress log)
+share a root cause — iteration against Owner visual review alone, with no
+check against an authoritative source for either real crochet construction
+or real yarn/rod mechanics. `docs/crochet-context.md` already self-flags
+this ("not been checked against a specific canonical... source"); the
+`relax.rs` bending/barrier constants are separately documented as
+"empirically stable" (solver-tuned) rather than derived from real yarn
+material properties. Rather than a one-off fix, the Owner asked for a
+reusable mechanism, since other projects will likely need similar depth in
+different, rarely-repeating domains. Set up as: a general-purpose
+`domain-expert` subagent (`~/.claude/agents/domain-expert.md`, portfolio-
+wide, same footing as `lead-software-architect`) invoked per-domain on
+demand rather than a fixed team, documented in `COMPANY/STANDARDS.md` →
+"Domain depth." First use is G-004 (this project), reviewing crochet
+construction/terminology and yarn/rod mechanics as two separate domains in
+parallel. Alternative considered: fold domain checks into the existing
+codex-cli second-opinion step — rejected because codex is a *general*
+coding model with no better claim to textile/materials expertise than
+Claude itself; the gap is domain research grounded in real sources, not a
+second model's opinion. See G-004 in `GOALS.md` for the goal/milestones
+and its progress log for outcomes as the reviews land.
+
+**D14 — G-004's domain review outcome: two real construction/rendering
+misconceptions corrected, physics found to be more soundly grounded than
+its own "empirically stable" caveat suggested, calibration deferred to a
+new backlog goal (2026-09-07, Owner-triaged).** Full findings in
+`docs/crochet-construction-reference.md` and `docs/rod-mechanics-reference.md`.
+Outcome of the three items put to the Owner:
+1. **`yarn_shape.rs`'s chain-link "alternating orientation like a
+   keychain" claim was wrong and is fixed** — real tensioned crochet chain
+   is flat/ribbon-like with a consistent orientation; the code now uses a
+   single fixed loop plane for the real/rendered/validated geometry. This
+   surfaced a genuine second issue while fixing the first: the solver's
+   coarse contact proxy (`build_stitch_curve_points_coarse`, used only by
+   `relax.rs`'s per-step collision force) still needs a per-link plane
+   variation, but for a reason that has nothing to do with the debunked
+   construction claim — raw-placed chain links start out nearly collinear,
+   so a fixed plane gave consecutive links' coarse contact loops a
+   near-coincident starting bulge, and removing the alternation
+   unconditionally broke the slip-stitch ring-closing regression test
+   (`relax.rs`'s `slip_stitch_join_closes_a_chain_into_a_genuine_non_intersecting_ring`).
+   Resolution: kept the alternation *only* in the coarse contact path,
+   honestly documented as the same kind of numerical degeneracy-breaker as
+   `geometry.rs`'s existing `CHAIN_SYMMETRY_BREAK_AMPLITUDE` — not a claim
+   about real yarn. Re-verified full test suite back to the 103-passed/
+   1-pre-existing-failure baseline afterward.
+2. **The alternating left/right "twist" on tr+/dtr+ posts was also wrong
+   and is fixed.** The domain review found real crochet sources genuinely
+   split on whether a twisted post is a real feature or a documented sign
+   of a technique error, unresolvable by literature search alone. Per the
+   Owner's direction, resolved by direct visual inspection of real
+   correctly-worked treble-crochet photos (via browser): every
+   yarn-over/pull-through stage on a real post leans the *same* direction
+   — a consistent one-directional diagonal texture, never an alternating
+   zigzag. `build_post_curve_points`'s alternating `sign` per bar is now a
+   single fixed direction. Same full-suite re-verification, same clean
+   result.
+3. **Uncalibrated stiffness constants / no unit system / absent friction —
+   not fixed now, logged as `G-005` (`DRAFT`).** The rod-mechanics review
+   found this is currently a deliberate, internally-consistent choice
+   (matches D5: elasticity is topology-driven, not yarn-material-driven),
+   not an oversight — but the Owner wants real yarn-weight-dependent
+   draping eventually, which the current model structurally can't express.
+   Rather than starting that work now, captured it as its own future goal
+   since a length/mass/time unit system has to be decided before any real
+   yarn property can be imported into a stiffness constant — a bigger,
+   separately-planned undertaking, not a quick fix alongside this one.
 
 ## Milestone re-plan pending (2026-08-24)
 

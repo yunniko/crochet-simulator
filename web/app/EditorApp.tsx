@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import { saveScheme } from "@/app/actions";
 import SchemeEditor from "@/components/SchemeEditor";
-import { PRESETS } from "@/lib/presets";
+import { STARTING_ROPE } from "@/lib/starting-rope";
 import type { CapacityStyle, LoopTarget, StitchKind, WireStitch } from "@/lib/stitch-kinds";
 import {
   clickEmptySpace,
@@ -30,11 +30,14 @@ interface EditorAppProps {
 }
 
 export default function EditorApp({ initialStitches, initialSlug, initialName }: EditorAppProps) {
-  // Empty by default (M8): the app starts with just the undecorated
-  // starting yarn stub (see YarnViewer), ready to build from scratch by
-  // clicking tools/render — not a preloaded example. Presets remain
-  // available as alternate starting points via the header buttons.
-  const [stitches, setStitches] = useState<WireStitch[]>(initialStitches ?? []);
+  // Starts with a real, simulated long chain (STARTING_ROPE, 2026-08-30 —
+  // see lib/starting-rope.ts) rather than an empty canvas or a preset
+  // picker: a genuine piece of yarn to build from immediately, computed by
+  // the same core pipeline as anything else, not a decorative placeholder.
+  // "Clear" (below) still resets to a true empty scheme for building
+  // entirely from scratch — that flow stays intact, just no longer the
+  // default on load.
+  const [stitches, setStitches] = useState<WireStitch[]>(initialStitches ?? STARTING_ROPE);
   const [placement, setPlacement] = useState<PlacementState>(INITIAL_PLACEMENT_STATE);
   // Off by default: a single click on a target immediately places the
   // stitch (the common case). Decrease mode is an explicit opt-in — click
@@ -85,31 +88,12 @@ export default function EditorApp({ initialStitches, initialSlug, initialName }:
     );
   };
 
-  const loadScheme = (newStitches: WireStitch[]) => {
-    setStitches(newStitches);
-    setPlacement(INITIAL_PLACEMENT_STATE);
-    setSlug(undefined);
-    setName("");
-  };
-
   return (
     <div className="flex h-dvh w-dvw flex-col bg-[#141414] text-zinc-200">
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 px-4 py-3">
         <h1 className="text-sm font-medium tracking-wide text-zinc-400">
           crochet-sim <span className="text-zinc-600">— M8 editor</span>
         </h1>
-        <div className="flex flex-wrap gap-2">
-          {PRESETS.map((preset) => (
-            <button
-              key={preset.name}
-              title={preset.description}
-              onClick={() => loadScheme(preset.scheme.stitches)}
-              className="rounded bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700"
-            >
-              {preset.name}
-            </button>
-          ))}
-        </div>
         <SaveControls stitches={stitches} slug={slug} name={name} onName={setName} onSaved={setSlug} />
       </header>
 

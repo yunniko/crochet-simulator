@@ -40,12 +40,22 @@ export async function clickEmptyCorner(page: Page) {
  * no click-agnostic fallback here (a target-requiring tool ignores an
  * empty-space miss). Rather than hand-deriving the exact camera
  * projection for a given 3D point (real math, real risk of a subtly
- * wrong constant silently mis-clicking), this tries a small grid of
- * candidate points across the canvas and stops at the first one that
- * makes `isDone` true — `isDone` is checked from *outside* Playwright's
- * own auto-retry, so it must resolve quickly and reflect a real DOM read.
+ * wrong constant silently mis-clicking), this tries a grid of candidate
+ * points across the canvas and stops at the first one that makes
+ * `isDone` true — `isDone` is checked from *outside* Playwright's own
+ * auto-retry, so it must resolve quickly and reflect a real DOM read.
+ *
+ * `maxAttempts` default (M13): a `ch` link's rendered shape is now a
+ * near-closed loop (a thin ring with a hollow middle), not a solid line
+ * spanning its whole bounding box — a sparse grid that reliably hit the
+ * old shape started missing this one. Measured directly, not guessed: a
+ * scripted sweep of grid densities against the real dev server found
+ * several *denser*-than-before densities (e.g. an 11x11 grid) still
+ * missed outright, while a ~20x20 grid consistently hit — density vs.
+ * hit-rate isn't monotonic for a thin, off-center target like this, so
+ * there's real margin built into 400 rather than the minimum observed.
  */
-export async function clickUntil(page: Page, isDone: () => Promise<boolean>, maxAttempts = 16): Promise<void> {
+export async function clickUntil(page: Page, isDone: () => Promise<boolean>, maxAttempts = 400): Promise<void> {
   await waitForCanvasReady(page);
   const box = await page.locator("canvas").boundingBox();
   if (!box) throw new Error("canvas not found");

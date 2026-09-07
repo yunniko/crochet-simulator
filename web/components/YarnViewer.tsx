@@ -1,13 +1,15 @@
 "use client";
 
 import { OrbitControls } from "@react-three/drei";
-import { Canvas, type ThreeEvent } from "@react-three/fiber";
-import { useMemo } from "react";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 import type { WireStitch } from "@/lib/stitch-kinds";
 import type { WasmSegment } from "@/lib/wasm";
 import { buildYarnStrands, YARN_RADIUS, type Vec3 } from "@/lib/yarn-shape";
+
 
 const YARN_COLOR = "#e8dcc8";
 const FLAGGED_COLOR = "#e8543f";
@@ -32,14 +34,13 @@ function tubeFromPoints(points: Vec3[]): THREE.TubeGeometry | null {
 
 interface YarnTubesProps {
   segments: WasmSegment[];
-  stitches: WireStitch[];
   pendingTargets: number[];
   hasActiveTool: boolean;
   onStitchClick: (index: number) => void;
 }
 
-function YarnTubes({ segments, stitches, pendingTargets, hasActiveTool, onStitchClick }: YarnTubesProps) {
-  const strands = useMemo(() => buildYarnStrands(segments, stitches), [segments, stitches]);
+function YarnTubes({ segments, pendingTargets, hasActiveTool, onStitchClick }: YarnTubesProps) {
+  const strands = useMemo(() => buildYarnStrands(segments), [segments]);
 
   return (
     <>
@@ -70,18 +71,61 @@ function YarnTubes({ segments, stitches, pendingTargets, hasActiveTool, onStitch
   );
 }
 
-/** The undecorated starting piece of yarn shown before any stitch exists — clicking it is exactly an empty-space click (`Canvas`'s `onPointerMissed` handles it), it's just something to see and aim at. */
-function StartingYarnStub() {
-  const geometry = useMemo(
-    () => tubeFromPoints([{ x: 0, y: 0, z: -1.2 }, { x: 0, y: 0, z: 0 }]),
-    [],
-  );
-  if (!geometry) return null;
-  return (
-    <mesh geometry={geometry}>
-      <meshStandardMaterial color={YARN_COLOR} roughness={0.85} metalness={0.05} />
-    </mesh>
-  );
+/**
+ * Frames the camera to whatever geometry actually exists, instead of a
+ * fixed position/distance tuned for one small demo scheme. Needed once the
+ * default starting scheme became a real, much larger rope (`lib/starting-
+ * rope.ts`, 2026-08-30) — the old fixed `camera={{ position: [4, 4, 6] }}`
+ * left most of it outside the view frustum entirely. This computes a real
+ * bounding sphere from the actual computed segment points (not a guessed
+ * size) and positions the camera to fit it, keeping the same viewing angle
+ * the fixed camera used. Deliberately only re-fits on the transition from
+ * empty to non-empty (on mount with a real starting scheme, and again
+ * after a Clear + rebuild) — not on every single stitch placement, which
+ * would otherwise yank the camera away from wherever the Owner has
+ * manually orbited to while building. Driven by `useFrame` (r3f's own
+ * render loop) rather than `useEffect`, since the fit needs to run as part
+ * of an actual rendered frame, not just a React commit.
+ */
+function CameraFit({ segments, isEmpty, controlsRef }: { segments: WasmSegment[]; isEmpty: boolean; controlsRef: React.RefObject<OrbitControlsImpl | null> }) {
+  const { camera } = useThree();
+  const framedSinceEmptyRef = useRef(false);
+
+  useFrame(() => {
+    if (isEmpty) {
+      framedSinceEmptyRef.current = false;
+      return;
+    }
+    if (framedSinceEmptyRef.current || segments.length === 0) return;
+    framedSinceEmptyRef.current = true;
+
+    const box = new THREE.Box3();
+    for (const seg of segments) {
+      box.expandByPoint(toThree(seg.start));
+      box.expandByPoint(toThree(seg.end));
+    }
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
+
+    const perspective = camera as THREE.PerspectiveCamera;
+    const fovRadians = (perspective.fov * Math.PI) / 180;
+    // 1.25x margin so the geometry doesn't touch the viewport edges.
+    const distance = (radius / Math.sin(fovRadians / 2)) * 1.25;
+
+    // Same viewing angle the old fixed camera used ([4, 4, 6]), just
+    // scaled to a distance that actually fits the real content.
+    const direction = new THREE.Vector3(4, 4, 6).normalize();
+    camera.position.copy(center.clone().addScaledVector(direction, distance));
+    camera.lookAt(center);
+    perspective.updateProjectionMatrix();
+
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(center);
+      controlsRef.current.update();
+    }
+  });
+
+  return null;
 }
 
 export interface YarnViewerProps {
@@ -101,9 +145,16 @@ export interface YarnViewerProps {
  * `lib/yarn-shape.ts` for the curve-generation logic and its documented
  * limits. M8: also the click surface for the direct-manipulation editor —
  * each stitch is its own clickable mesh (not merged with neighbours, see
- * `Strand.stitchIndex`), and an empty scheme shows a plain starting stub
- * instead of nothing, since the render is how building a scheme starts
- * now, not just how it's displayed afterward.
+ * `Strand.stitchIndex`). A genuinely empty scheme (`stitches.length === 0`,
+ * reached via "Clear" — the app no longer starts empty by default, see
+ * `lib/starting-rope.ts`) renders nothing at all: no decorative placeholder
+ * (per the Owner's standing "nothing decorative" instruction), just an
+ * empty scene an `onPointerMissed` click still works against. The
+ * `stitches` prop still matters here even though it's not itself rendered
+ * — it's what tells this component to stop showing `segments` at all,
+ * rather than a stale render of whatever scheme was computed most recently
+ * (`ComputePane` deliberately leaves `result` stale during Clear, see its
+ * own comment).
  */
 export default function YarnViewer({
   segments,
@@ -114,9 +165,11 @@ export default function YarnViewer({
   onEmptySpaceClick,
 }: YarnViewerProps) {
   const isEmpty = stitches.length === 0;
+  const controlsRef = useRef<OrbitControlsImpl | null>(null);
   return (
     <Canvas
       camera={{ position: [4, 4, 6], fov: 45 }}
+      frameloop="always"
       className="h-full w-full"
       style={{ cursor: hasActiveTool ? "pointer" : "auto" }}
       // preserveDrawingBuffer: not needed for on-screen rendering, but
@@ -141,18 +194,16 @@ export default function YarnViewer({
       <ambientLight intensity={0.6} />
       <directionalLight position={[5, 8, 5]} intensity={1.1} />
       <directionalLight position={[-4, -2, -5]} intensity={0.3} />
-      {isEmpty ? (
-        <StartingYarnStub />
-      ) : (
+      {isEmpty ? null : (
         <YarnTubes
           segments={segments}
-          stitches={stitches}
           pendingTargets={pendingTargets}
           hasActiveTool={hasActiveTool}
           onStitchClick={onStitchClick}
         />
       )}
-      <OrbitControls makeDefault />
+      <CameraFit segments={segments} isEmpty={isEmpty} controlsRef={controlsRef} />
+      <OrbitControls ref={controlsRef} makeDefault />
     </Canvas>
   );
 }

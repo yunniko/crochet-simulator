@@ -110,13 +110,17 @@ actual simulation engine — this is only the viewer). Goal/milestone plan:
   projection for a known 3D point — deliberately pragmatic, not elegant,
   see its own comment.
 - **Test coverage gap, found and fixed in M5 — worth repeating so it isn't
-  reintroduced:** a preset/test can build a scheme and assert its stitch
-  count without ever asserting it *validates* (`ok`/`violation_count`).
-  That gap let a genuinely self-intersecting "freeform" demo preset pass
-  both its Rust and Playwright tests while actually rendering "Flagged" in
-  the browser — caught only by manual visual verification. Any new preset
-  or e2e spec that's meant to demonstrate a *working* scheme should assert
-  `ok`/`violation_count` explicitly, not just stitch count or a target
-  label — see `wire_scheme_supports_freeform_non_row_targeting` in
-  `../wasm/src/lib.rs` and the matching Playwright spec for the pattern.
+  reintroduced:** a demo scheme/test can build a scheme and assert its
+  stitch count without ever asserting it *validates* (`ok`/
+  `violation_count`). That gap let a genuinely self-intersecting
+  "freeform" demo scheme pass both its Rust and Playwright tests while
+  actually rendering "Flagged" in the browser — caught only by manual
+  visual verification. Any new demo scheme or e2e spec that's meant to
+  demonstrate a *working* scheme should assert `ok`/`violation_count`
+  explicitly, not just stitch count or a target label — see
+  `wire_scheme_supports_freeform_non_row_targeting` in `../wasm/src/lib.rs`
+  for the pattern (the UI-facing preset system this note originally also
+  referenced was removed 2026-08-30, see `GOALS.md` → G-003; the lesson
+  about asserting validation status, not just structure, still applies to
+  anything new).
 

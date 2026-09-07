@@ -200,79 +200,13 @@ pub fn compute_scheme(wire: JsValue) -> Result<JsValue, JsValue> {
 mod tests {
     use super::*;
 
-    fn ref_at(index: usize) -> StitchRef {
-        StitchRef::new(0, index)
-    }
-
-    /// Round 1 of a standard flat-circle start (docs §5a): a tightened
-    /// magic ring, 6 dc into it. Deliberately stops there rather than
-    /// adding round 2's 2-in-each increase — building that surfaced the
-    /// cross-target local-density limitation documented in
-    /// `docs/crochet-context.md` §5a; still open, so kept out of the
-    /// preset used as a "known good" regression fixture.
-    fn build_flat_circle_scheme() -> Scheme {
-        let mut thread = Thread::new();
-        thread.stitches.push(StitchInstance::new(MR, vec![])); // 0
-        for _ in 0..6 {
-            thread
-                .stitches
-                .push(StitchInstance::new(DC, vec![ref_at(0)])); // 1-6
-        }
-        let mut scheme = Scheme::new();
-        scheme.add_thread(thread);
-        scheme
-    }
-
-    /// A deliberately overloaded ring (docs §5a: "eleven won't fit") — 15
-    /// dc crammed into one tightened magic ring, well past comfortable
-    /// capacity. Exists to prove the "visible flag" path actually lights
-    /// up, not just the clean path.
-    fn build_overloaded_ring_scheme() -> Scheme {
-        let mut thread = Thread::new();
-        thread.stitches.push(StitchInstance::new(MR, vec![])); // 0
-        for _ in 0..15 {
-            thread
-                .stitches
-                .push(StitchInstance::new(DC, vec![ref_at(0)])); // 1-15
-        }
-        let mut scheme = Scheme::new();
-        scheme.add_thread(thread);
-        scheme
-    }
-
+    /// Confirms the wire-parsing path (`build_scheme_from_wire`) produces a
+    /// genuinely valid, clean-validating scheme end to end — not tied to
+    /// any particular UI-facing scheme shape (the old preset-branded demo
+    /// functions this replaced were removed 2026-08-30 along with the
+    /// preset feature itself, see `GOALS.md` → G-002).
     #[test]
-    fn flat_circle_demo_validates_clean() {
-        let result = compute(&build_flat_circle_scheme()).unwrap();
-        assert_eq!(result.stitch_count, 7);
-        assert!(
-            result.ok,
-            "expected the flat circle demo to validate cleanly: {:?}",
-            result
-                .segments
-                .iter()
-                .filter(|s| s.flagged)
-                .map(|s| &s.label)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result.violation_count, 0);
-        assert!(!result.segments.is_empty());
-        assert!(result.segments.iter().all(|s| !s.flagged));
-    }
-
-    #[test]
-    fn overloaded_demo_is_flagged() {
-        let result = compute(&build_overloaded_ring_scheme()).unwrap();
-        assert_eq!(result.stitch_count, 16);
-        assert!(
-            !result.ok,
-            "expected the overloaded ring demo to be flagged"
-        );
-        assert!(result.violation_count > 0);
-        assert!(result.segments.iter().any(|s| s.flagged));
-    }
-
-    #[test]
-    fn wire_scheme_builds_the_same_flat_circle() {
+    fn wire_scheme_computes_a_valid_scheme_end_to_end() {
         let wire = WireScheme {
             stitches: {
                 let mut v = vec![WireStitch {
@@ -281,7 +215,7 @@ mod tests {
                     loop_target: None,
                     capacity_override: None,
                 }];
-                for _ in 0..6 {
+                for _ in 0..3 {
                     v.push(WireStitch {
                         kind: "dc".into(),
                         targets: vec![0],
@@ -294,8 +228,41 @@ mod tests {
         };
         let scheme = build_scheme_from_wire(&wire).unwrap();
         let result = compute(&scheme).unwrap();
-        assert_eq!(result.stitch_count, 7);
+        assert_eq!(result.stitch_count, 4);
         assert!(result.ok);
+    }
+
+    /// A deliberately overloaded ring (docs §5a: "eleven won't fit") — 15
+    /// dc crammed into one tightened magic ring, well past comfortable
+    /// capacity. Exists to prove the "visible flag" path actually lights
+    /// up through the wire bridge, not just the clean path above.
+    #[test]
+    fn wire_scheme_flags_an_overloaded_ring() {
+        let wire = WireScheme {
+            stitches: {
+                let mut v = vec![WireStitch {
+                    kind: "mr".into(),
+                    targets: vec![],
+                    loop_target: None,
+                    capacity_override: None,
+                }];
+                for _ in 0..15 {
+                    v.push(WireStitch {
+                        kind: "dc".into(),
+                        targets: vec![0],
+                        loop_target: None,
+                        capacity_override: None,
+                    });
+                }
+                v
+            },
+        };
+        let scheme = build_scheme_from_wire(&wire).unwrap();
+        let result = compute(&scheme).unwrap();
+        assert_eq!(result.stitch_count, 16);
+        assert!(!result.ok, "expected the overloaded ring to be flagged");
+        assert!(result.violation_count > 0);
+        assert!(result.segments.iter().any(|s| s.flagged));
     }
 
     #[test]

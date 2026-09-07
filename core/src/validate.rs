@@ -82,10 +82,20 @@ const SAME_POINT_EPSILON: f64 = 1e-6;
 /// spatial hash would be the first thing to add if this ever needs to
 /// scale to large schemes.
 pub fn check_self_intersections(segments: &[PathSegment], min_distance: f64) -> IntersectionReport {
+    let owner_pairs = structurally_adjacent_owner_pairs(segments);
     let mut violations = Vec::new();
     for i in 0..segments.len() {
         for j in (i + 1)..segments.len() {
-            if segments_are_adjacent(&segments[i], &segments[j]) {
+            let a = segments[i].owner;
+            let b = segments[j].owner;
+            if a == b {
+                // Same stitch's own body: a real yarn loop is *designed*
+                // to bring non-adjacent parts of its own path close
+                // together — see `structurally_adjacent_owner_pairs`'s
+                // doc comment for the fuller reasoning.
+                continue;
+            }
+            if owner_pairs.contains(&(a, b)) || owner_pairs.contains(&(b, a)) {
                 continue;
             }
             let distance = segment_segment_distance(
@@ -95,11 +105,7 @@ pub fn check_self_intersections(segments: &[PathSegment], min_distance: f64) -> 
                 segments[j].end,
             );
             if distance < min_distance {
-                violations.push(Intersection {
-                    a: segments[i].owner,
-                    b: segments[j].owner,
-                    distance,
-                });
+                violations.push(Intersection { a, b, distance });
             }
         }
     }
@@ -107,6 +113,48 @@ pub fn check_self_intersections(segments: &[PathSegment], min_distance: f64) -> 
         ok: violations.is_empty(),
         violations,
     }
+}
+
+/// M14: which pairs of *owners* (not just individual segment pairs) are
+/// structurally connected — their bodies genuinely join at a shared raw
+/// point — and so should never be checked against each other at all, not
+/// just at that one shared point.
+///
+/// Before M14, every stitch's raw path was a straight `base`-to-`top`
+/// line, so only its very first/last sub-segment could ever be near a
+/// neighbouring stitch's junction point anyway — segment-level adjacency
+/// (`segments_are_adjacent`, matching one literal shared endpoint) and
+/// owner-level adjacency were effectively the same thing. Once a
+/// stitch's raw path became a real loop (`crate::yarn_shape` — sweeping
+/// most of the way around a circle so it reads as an actual ring, not a
+/// line), that's no longer true: a loop has *many* sub-segments
+/// clustering near its own base and top, because that's what closing a
+/// loop up at a point looks like. Two stitches whose bodies genuinely
+/// join (a chain link's own loop feeding into the next one; a stitch's
+/// body meeting the bridge that leaves it) will have several sub-segment
+/// pairs land close together near that junction without literally
+/// sharing the exact same point — checking only the one exact-match pair
+/// and flagging the rest as a "collision" would be flagging the stitch's
+/// own ordinary, correct construction. Two segments landing on the *same*
+/// raw point is still what decides adjacency (this doesn't loosen that
+/// standard, see module docs on why raw coordinates decide it) — it now
+/// just gets applied per pair of *owners*, not per pair of segments.
+fn structurally_adjacent_owner_pairs(
+    segments: &[PathSegment],
+) -> HashSet<(SegmentOwner, SegmentOwner)> {
+    let mut pairs = HashSet::new();
+    for i in 0..segments.len() {
+        for j in (i + 1)..segments.len() {
+            if segments[i].owner == segments[j].owner {
+                continue;
+            }
+            if segments_are_adjacent(&segments[i], &segments[j]) {
+                pairs.insert((segments[i].owner, segments[j].owner));
+                pairs.insert((segments[j].owner, segments[i].owner));
+            }
+        }
+    }
+    pairs
 }
 
 fn segments_are_adjacent(a: &PathSegment, b: &PathSegment) -> bool {

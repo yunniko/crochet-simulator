@@ -122,10 +122,26 @@ pub fn relaxed_yarn_segments(
                 }
             }
 
-            let n = def.path_segments().max(1);
-            let points: Vec<Vec3> = (0..=n)
-                .map(|k| relaxed_base + (relaxed_top - relaxed_base) * (k as f64 / n as f64))
-                .collect();
+            // M14: the same real-loop-topology curve `place_scheme` used
+            // for the raw path, now anchored at the relaxed base/top.
+            // `def` alone determines the point *count* for a real
+            // loop/shaft curve, so that part always zips 1:1 against
+            // `raw_stitch.path` below — but whether a stitch collapses to
+            // a single degenerate point (`ss`/`mr`) is a structural fact
+            // about the *raw* placement (their raw base and top are
+            // exactly equal by construction), not something relaxation
+            // should get to redecide: relaxation can nudge two points
+            // that started exactly coincident apart by a hair, which
+            // would silently flip `build_stitch_curve_points`'s own
+            // `height < 1e-9` branch on the relaxed side only, producing
+            // a *different* point count than the raw side and truncating
+            // the zip below. Mirroring the raw side's own decision
+            // instead keeps both sides' point counts identical always.
+            let points = if raw_stitch.path.len() == 1 {
+                vec![relaxed_base]
+            } else {
+                crate::yarn_shape::build_stitch_curve_points(relaxed_base, relaxed_top, def)
+            };
             for (w, raw_w) in points.windows(2).zip(raw_stitch.path.windows(2)) {
                 segments.push(PathSegment {
                     start: w[0],

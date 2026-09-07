@@ -14,8 +14,11 @@ the construction rules the engine is built on): **[docs/crochet-context.md](./do
 
 ## Status
 
-M1–M12 done (of a 12-milestone plan). **Live at
-https://crochet.app.craftodejnice.cz.**
+G-001 (placement/physics engine, M1–M12) done. **Live at
+https://crochet.app.craftodejnice.cz** — the live deploy currently
+reflects G-001 only; G-002 (real stitch-loop geometry) and G-003 (real
+starting rope, no presets) are both verified locally but not yet
+reviewed/deployed (see `GOALS.md` and `HANDOVER.md`'s Next Steps).
 `core/` (Rust) implements the insertion-graph engine — stitch registry,
 raw 3D placement (capacity-aware: an ordinary stitch validates ~7 shared
 siblings and correctly flags ~11+; a tightened magic ring reads as pointy
@@ -36,15 +39,21 @@ configuration in the first place, plus self-intersection / stitch-count
 validation on the relaxed shape as a final check.
 `wasm/` bridges it to the browser via `wasm-bindgen`, exposing one
 general `compute_scheme` call for whatever graph the UI builds. `web/` is
-a direct-manipulation editor: the app starts with a plain starting piece
-of yarn; pick a stitch-kind tool from the palette and click the render to
-place it (a starting chain or magic ring opens a scheme; empty space also
-works for ordinary chains; a target-requiring stitch is placed by
+a direct-manipulation editor: the app starts with a real, computed long
+piece of yarn already in place (`lib/starting-rope.ts` — a genuinely
+bendy chain, not a placeholder, see `HANDOVER.md`'s G-003 entry), ready to
+build onto immediately; "Clear" reaches a true empty scheme to build from
+scratch instead. Pick a stitch-kind tool from the palette and click the
+render to place it (a starting chain or magic ring opens a scheme from
+empty; empty space also works for ordinary chains; a target-requiring
+stitch is placed by
 clicking its target directly — one click, placed immediately — or, with
 "Decrease mode" toggled on, by clicking several targets in turn and
 confirming with the tool button, to build a decrease). The yarn renders
-live as real, thick, per-stitch-shaped 3D tubes (not flat lines — see
-`HANDOVER.md`'s M7 entry) with validation updating alongside it, and
+live as real, thick, per-stitch-shaped 3D tubes — genuine loop-through-
+loop stitch topology computed in `core` itself (see `HANDOVER.md`'s
+G-002 M2 entry), not a rendering-layer approximation — with validation
+updating alongside it, and
 saving gives back an unguessable link to reload/share the scheme by — no
 accounts, see `HANDOVER.md`'s M6 access-model decision. See `GOALS.md` →
 G-001 for the milestone plan and progress log, and known/deferred
@@ -108,8 +117,8 @@ already rebuilt/committed — see above):
 docker compose --profile app up -d --build   # db + migrate + app, http://127.0.0.1:30020
 ```
 
-Pick a starting-chain or magic-ring tool and click the render to build a
-scheme from scratch, or start from one of four presets (flat circle,
-overloaded ring, shell, freeform spike); Save gives back an unguessable
+The app opens with a real starting rope already in place, ready to build
+onto — click "Clear" first if you'd rather start from a true blank scheme
+with a starting-chain or magic-ring tool. Save gives back an unguessable
 `/s/<slug>` link that reloads (or re-saves over) that exact scheme — no
 accounts, see `HANDOVER.md`'s M6 access-model decision.

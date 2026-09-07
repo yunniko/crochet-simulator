@@ -35,7 +35,7 @@ also shipped mid-M9 — see progress log.**
   geometrically impossible (with an example the Owner tries and confirms
   looks right/wrong appropriately), save and reload a scheme, and the app
   is deployed and reachable the same way the portfolio's other projects
-  are (see `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`).
+  are (see `E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`).
 - **Constraints:** None from the Owner beyond the stack decisions already
   logged in `HANDOVER.md` (Rust→WASM core, Next.js/TS UI, standalone web
   app not a Blender plugin, full 3D simulation for the MVP — not a 2D-only
@@ -96,7 +96,7 @@ sign-off before M1 starts):
       patterns, to prove the editor isn't secretly row-locked.
 - [x] M6 — Persistence + deploy: save/load schemes (Postgres, matching
       portfolio pattern), then deploy following
-      `E:\CLAUDE\COMPANY\INFRASTRUCTURE.md`'s standard pattern, verified
+      `E:\CLAUDE\COMPANY\INFRASTRUCTURE_DEPLOY.md`'s standard pattern, verified
       end-to-end in a browser against the live URL.
 - [x] M7 — Realistic yarn rendering: render the yarn with real cylindrical
       thickness (the yarn-diameter constant the validator already uses,
@@ -885,3 +885,477 @@ sign-off before M1 starts):
   Project scaffolded: `README.md`, `HANDOVER.md`, this file. Not yet
   reported to Owner for milestone-plan sign-off — do that before starting
   M1 per `E:\CLAUDE\COMPANY\OPERATIONS.md` step 2.
+
+### G-002 · Stitches visually read as their real kind, not generic tubes — ACTIVE
+- **What:** The rendered yarn post/link for each stitch kind actually
+  looks like that stitch's real construction (the loops/bars a `dc`, a
+  `tr`, a chain link genuinely have), not a uniform tube whose only
+  distinguishing feature is height.
+- **Why:** After M1-M12 (G-001) shipped correct *placement/physics*, the
+  Owner reviewed the live result and noted the individual stitches don't
+  read as their real kind — the point of a per-kind visual model is that
+  the rope bends differently for every stitch kind, which the renderer
+  didn't yet do.
+- **Acceptance criteria:** Owner looks at the rendered output for at
+  least `ch`/`start_ch` and `dc` (the two kinds asked for first) and
+  agrees the shape reads as recognizably that stitch, not a generic post;
+  further kinds (`htr`/`tr`/`dtr`/`trtr`/`quad_tr`) follow the same
+  reasoning and get the same review.
+- **Constraints:** Per the Owner's own framing of the choice (stitch-
+  editor UI vs. JulAI authoring from description/reference images) —
+  JulAI authors the shapes directly (faster to iterate, no UI to build
+  first); a dedicated stitch-editor UI remains on the table as a later
+  option if hand-authored shapes don't converge on what the Owner wants.
+  **Superseded 2026-08-30**: M1's rendering-layer-only constraint (below)
+  held only through M1. Once M1's client-side shapes were rejected as
+  "nothing in common with real crochet stitches," the Owner explicitly
+  authorized dropping it: *"It would be ok even if we will need to
+  rewrite the whole codebase, we need real simulation."* Real loop-
+  topology math now lives in `core/src/yarn_shape.rs`, feeding both raw
+  placement (`geometry.rs`) and relaxation physics (`relax.rs`) — not
+  just the renderer. `web/lib/yarn-shape.ts` is now a thin ~70-line
+  consumer of that real core geometry (segment grouping only), not a
+  shape generator. See M2's progress log for the full account.
+
+**Milestones:**
+- [x] M1 — First-pass construction-grounded shapes for all stitch kinds
+      (posts get one "bar" bulge per real yarn-over/pull-through stage;
+      chains get an alternating oval-link bulge instead of a straight
+      line), built and automatically tested; Owner reviews in a real
+      browser and gives directional feedback (keep iterating in code, or
+      pivot to a dedicated stitch-editor UI). **Done, then rejected** —
+      see M2's log: the Owner reviewed and found it still didn't read as
+      real crochet, which is what triggered M2's much larger scope.
+- [ ] M2 — Iterate on M1's shapes per Owner feedback until they read as
+      correct, or the Owner decides a stitch-editor UI is the better path
+      — scope TBD by what M1's review surfaced. **Technical work complete
+      and verified (see progress log); checkbox stays open pending the
+      Owner's own visual sign-off**, per this goal's acceptance criteria
+      ("Owner looks at the rendered output... and agrees") — not yet
+      given as of the last progress-log entry.
+
+**Progress log** (newest first):
+- 2026-08-30 — **M2 — real loop-topology core rewrite + flat-disc growth-
+  axis fix, technical work complete and fully verified; Owner review of
+  the final result still pending.** A long, several-stage arc from the
+  same starting complaint ("stitches look nothing like real stitches"):
+  1. **Client-side "wiggle" iteration, rejected.** First tried a generic
+     spiral wiggle, then real loop-through-loop math (chains as one big
+     loop pulled through the previous one; posts as shaft + bar-loops) —
+     both still purely in `web/lib/yarn-shape.ts`, per M1's original
+     rendering-layer constraint. Owner: "Still not what it should be...
+     nothing in common with real crochet stitches."
+  2. **Architectural redirect, Owner-directed.** Owner shared a reference
+     document on crochet-structure simulation methodology and said
+     plainly: *"It would be ok even if we will need to rewrite the whole
+     codebase, we need real simulation."* Diagnosis: a rendering-layer
+     overlay can only ever approximate shape from the outside — the real
+     fix is moving loop topology into `core` so *placement and physics*
+     reason about real geometry, not a cosmetic approximation drawn over
+     abstract straight posts. Owner: "proceed."
+  3. **Core rewrite** — new `core/src/yarn_shape.rs`: the same loop-
+     through-loop math, now real Rust with its own 11 unit tests, wired
+     into raw placement (`geometry.rs`'s `PlacedStitch.path`) and relaxed
+     reconstruction (`path.rs`), replacing the old straight-line
+     `linspace` approximation everywhere. Broke validation initially —
+     correctly, since real geometry has real adjacency subtleties a
+     straight-post model never had (a loop's own sub-segments near its
+     own junctions aren't literally coincident with a neighbour, but
+     shouldn't be flagged against it either); fixed via owner-*pair*-level
+     adjacency exclusion in `validate.rs` rather than the old per-segment
+     rule. Also fixed a raw/relaxed degenerate-collapse mismatch for
+     zero-height stitches (`path.rs`).
+  4. **Forces extended to real geometry, Owner-directed.** Owner: "Continue
+     into extending the forces to real geometry" — M12's barrier contact
+     (`relax.rs`) only ever separated coarse straight segments; rewritten
+     to operate on the same fine-grained real loop curves (`CollisionUnit`/
+     `unit_current_points`/`redistribute_unit_force`, with a broad-phase
+     distance filter keeping the full suite under 1 second despite
+     genuine per-sample collision checking). Found and fixed a real bug
+     along the way: extending the existing segment-length exclusion rule
+     to stitch bodies using the *bridge* baseline (meant for bridges only)
+     silently excluded nearly every stitch body from barrier checking at
+     all (`hits=0`, found via targeted debug instrumentation) — fixed by
+     giving stitch bodies their own baseline.
+  5. **Simplified the renderer to match, per Owner redirect.** Owner:
+     "what we need to concentrate so far is the stitch geometry" — made
+     `web/lib/yarn-shape.ts` a thin ~70-line consumer of core's real
+     geometry (down from ~334 lines), removing all client-side shape
+     duplication now that `core` produces the real thing directly.
+  6. **The flat-disc / Gauss-Bonnet fix.** Owner shared a real reference
+     photo (`spiral-vs-sl-st-copy.jpg`: flat magic-ring rounds in sc/hdc/
+     dc) and asked what was missing. Diagnosis: every stitch's "height"
+     was added in a fixed global +Z, so a flat round grew into a cone/
+     spike instead of staying flat — a real disc needs the growth to stay
+     in-plane (radial), per the Gauss-Bonnet relationship in the Owner's
+     earlier-shared reference document (a flat disc has zero Gaussian
+     curvature, which a fixed vertical growth axis cannot produce for a
+     radiating fan). Owner: "yes please." Implemented a per-stitch
+     `growth_axes` map in `geometry.rs`: fanned siblings (more than one
+     sharing a target) grow radially — `top = base + growth_axis *
+     height()`, `growth_axis = (cos(absolute_angle), sin(absolute_angle),
+     0)` — instead of straight up; non-fanned continuations inherit their
+     target's own axis; decreases average their targets' axes. A **hard
+     cutoff** at `COMFORTABLE_CAPACITY` (not a smooth blend — a blend was
+     tried first and failed to preserve the "11 won't fit" capacity
+     calibration, confirmed by debug output showing tops still over-
+     spread) reverts overloaded fans to straight-up growth, since pure
+     radial growth would otherwise give every overloaded sibling free
+     escape room unrelated to real yarn-thickness constraints.
+  7. **Two real regressions found and fixed by re-verification, not just
+     by construction.** (a) The capacity-calibration test (11 stitches
+     into one target must still fail) regressed under naive full-radial
+     growth — fixed by the hard cutoff in item 6. (b) The single most
+     basic demo scheme (`mr` + 6 `dc`, "Flat circle (round 1)") itself
+     regressed: after the fix, tops correctly radiate to a flat hexagon,
+     but the "return" bridges from each far-out top back toward the next
+     sibling's near-center base converged too tightly to fully resolve
+     within the previous 150-step relaxation budget (one bridge pair sat
+     at distance 0.1498, just under the 0.15 threshold). Swept
+     steps=150/300/600/1200 directly: 300+ fully resolves it (0
+     violations). `RelaxationParams::default().steps` raised 150→300.
+     This regression was initially **missed** by `cargo test --workspace`
+     alone — that command stops testing later workspace crates once an
+     earlier one (`crochet-core`) has any failing test, so the `crochet-
+     wasm` crate's own regressed tests went unseen for several tuning
+     iterations until `cargo test -p crochet-wasm` was run explicitly.
+     Worth remembering for any future core change: always also run the
+     wasm crate's tests in isolation, not just the workspace command.
+  - **Honest, still-open residual, not fixed this session, unrelated to
+    the growth-axis work**: `mosaic_style_back_loop_row_with_front_loop_
+    spike_does_not_false_positive` (a chain vs. a back-loop-only `dc`,
+    3 violations) — root-caused earlier as a genuine chain-loop-size vs.
+    back-loop-offset structural interaction, plateaued across every
+    stiffness/active-distance/steps combination tried both before and
+    after the growth-axis change (chains in row context use `total==1`
+    so growth-axis inheritance doesn't touch it either way). Flagged to
+    the Owner previously; no direction given yet on whether to accept it
+    as a documented limitation or invest further.
+  - **Verified, in full**: `cargo fmt --all`/`--check`, `cargo clippy
+    --workspace --all-targets` clean. `cargo test --workspace` — 103
+    passed, 1 failed (only the known mosaic residual above). `cargo test
+    -p crochet-wasm` explicitly — 6 passed, 0 failed (confirms the flat-
+    circle-demo fix holds at the wasm layer, not just core). Rebuilt wasm
+    bindings (core's compiled behavior changed: `yarn_shape` module, new
+    default relaxation steps). `npm run lint`, `npm run build`, `npm run
+    test:unit` (46/46), `npm run test:e2e` (11/11, including "loading the
+    flat-circle preset validates clean") all clean. Manually browser-
+    verified beyond the automated suite, all four presets: flat circle
+    now renders a genuinely flat, radiating 6-pointed star/rosette with
+    **Status: OK** (previously flagged before the steps fix); overloaded
+    ring (15 dc into one `mr`) still correctly flags 4 intersections,
+    confirming the fix narrows false crowding without suppressing genuine
+    impossibility detection; shell and freeform-spike presets both OK.
+  - **Not yet done**: Owner's own visual sign-off on the corrected flat-
+    disc geometry (screenshots sent, not yet reviewed); a decision on the
+    mosaic residual; commit/push/redeploy (uncommitted, local-only as of
+    this entry, pending the Owner's go-ahead per the standing escalation
+    rule for anything leaving the workspace).
+- 2026-08-28 — **M1 in progress.** Rewrote `web/lib/yarn-shape.ts`'s
+  curve generation: posts (`dc` and taller) now get `STITCH_BAR_COUNTS[kind]`
+  localized, alternating-sign bar bulges instead of a generic multi-wrap
+  spiral — bar count mirrors `stitch.rs`'s own `pre_wraps`/`draw_through`
+  semantics (`Repeated2` stitches get `pre_wraps + 1` bars, matching
+  `StitchDef::height()`'s own formula; `dc` gets 1; `htr` gets 2 as a
+  deliberate visual choice despite being mechanically one motion — see
+  the constant's own comment). Chains (`ch`/`start_ch`) now get a single
+  oval bulge alternating side by stitch index, addressing the long-noted
+  "chains don't read as linked ovals" limitation, instead of a perfectly
+  straight line. Purely a rendering-layer change (`web/lib/yarn-shape.ts`
+  only) — no `core`/`wasm` changes, per this goal's own constraint.
+  Verified: `test:unit` (54/54, 2 new tests added for the chain bulge
+  behavior), `test:e2e` (11/11, confirms click-to-place still resolves
+  correctly against the new geometry), lint/build clean. Sent the Owner
+  two screenshots (shell preset, flat-circle round 1) for a first visual
+  read — **not yet reviewed by the Owner**, so not committed/pushed/
+  deployed yet; waiting on directional feedback before proceeding.
+
+### G-003 · Starting experience: a real simulated rope, no presets — ACTIVE
+- **What:** The app's opening state (and preset system) is replaced: no
+  preset-button picker, and the app starts with a long, genuinely bendy
+  piece of yarn already present — computed by the real placement/
+  relaxation pipeline, not a decorative placeholder curve.
+- **Why:** Owner feedback, stated plainly: *"We have problem with you not
+  understanding a geometry or a whole system we are building. Let's
+  remove all presets and start over. I want that on application start
+  there were a long bendy rope was present for start"* — followed by a
+  standing instruction that applies beyond just this goal: *"There will
+  be nothing decorative in this project. We are building a real-time
+  simulation. Do not use shortcuts for that unless it directly
+  requested"* (saved to memory as [[feedback_real_simulation_no_shortcuts]]).
+- **Acceptance criteria:** No preset buttons anywhere in the UI or its
+  backing code/tests; loading `/` shows a long, visibly bent/curled piece
+  of yarn (not a short straight stub, not a hand-authored curve) that
+  validates cleanly and can be built onto directly; "Clear" still reaches
+  a true empty scheme for building from scratch.
+- **Constraints:** Per the Owner's own standing instruction (see Why): the
+  bend must come from real stitch topology run through the actual core
+  pipeline, not a client-side/decorative shortcut.
+
+**Milestones:**
+- [x] M1 — Remove the preset system entirely (UI buttons, `lib/presets.ts`,
+      the `wasm/src/lib.rs` demo functions/tests named after it) and
+      replace the app's default starting scheme with a real, computed long
+      chain that loops back and joins itself (reusing M9's already-proven
+      chain-closes-into-a-ring mechanism, just longer and asymmetric —
+      loop plus trailing tail — rather than inventing a new one).
+      **Technical work complete and verified; checkbox stays open pending
+      the Owner's own visual sign-off**, consistent with this project's
+      standing practice of not marking a visually-judged goal done on
+      JulAI's own assessment alone.
+
+**Progress log** (newest first):
+- 2026-08-30 — **M1 — presets removed, real starting rope added, technical
+  work complete.**
+  1. **Presets removed entirely**: `web/lib/presets.ts` deleted; the
+     header's preset-button row and `EditorApp.tsx`'s now-unused
+     `loadScheme` helper removed. `wasm/src/lib.rs`'s preset-named test
+     helpers/tests (`build_flat_circle_scheme`, `build_overloaded_ring_
+     scheme`, `flat_circle_demo_validates_clean`, `overloaded_demo_is_
+     flagged`) removed; the one test with independently valuable coverage
+     (wire-format parsing produces a correct, working scheme) kept but
+     renamed and rebuilt around a neutral scheme
+     (`wire_scheme_computes_a_valid_scheme_end_to_end`), plus a new
+     `wire_scheme_flags_an_overloaded_ring` preserving the "flagging
+     actually works through the wire bridge" coverage under a neutral
+     name — nothing preset-branded left anywhere.
+  2. **Real starting rope** (`web/lib/starting-rope.ts`, new): 24 `ch` +
+     1 `ss` looping back to stitch 0 (M9's proven ring-closure mechanism,
+     verified to genuinely bow into a non-self-intersecting curve via real
+     DER bending physics — not new physics, just composed at a longer,
+     asymmetric scale) + 6 more `ch` continuing as a free tail past the
+     join. `EditorApp.tsx`'s `stitches` state now defaults to this instead
+     of `[]`; "Clear" still reaches true empty. First attempt used a
+     16-stitch tail and genuinely self-intersected (6 real violations,
+     caught immediately by the same real validator every other scheme
+     goes through — exactly the point of not faking this) — root cause:
+     an uncontrolled-direction tail long enough to cross back through the
+     loop's own footprint; fixed empirically by shortening the tail to 6,
+     re-verified clean via the actual e2e test, not assumed.
+  3. **Decorative empty-state stub removed** (`YarnViewer.tsx`): per the
+     Owner's "nothing decorative" instruction, a genuinely empty scheme
+     (reached via Clear) now renders nothing at all, not a placeholder
+     straight tube.
+  4. **A real camera-framing gap found and fixed**: the fixed `camera={{
+     position: [4,4,6] }}` was tuned for small demo schemes and left most
+     of the new, much larger rope outside the view frustum. Added
+     `CameraFit` (`YarnViewer.tsx`): computes a real bounding sphere from
+     the actual computed segment points (not a guessed size) and
+     positions the camera to fit it, keeping the old viewing angle;
+     re-fits only on the empty→non-empty transition (initial load, and
+     again after Clear + rebuild), not on every stitch placement, so it
+     doesn't yank the camera away from wherever the Owner has manually
+     orbited to mid-build.
+  5. **A real, fully-diagnosed rendering-environment quirk, honestly
+     documented, not silently worked around**: in this session's specific
+     remote/automated Chrome testing environment, `CameraFit`'s fit
+     computation is correct from the very first frame (confirmed directly
+     via in-page inspection — real, sensible bounding-sphere numbers
+     present immediately), but the canvas doesn't visibly repaint until a
+     genuine DOM pointer event (a click, a hover, a scroll) occurs — this
+     reproduced identically whether driven by `useEffect`, `useFrame`, an
+     explicit `frameloop="always"`, or a forced extra React render, and
+     resolved instantly the moment any real mouse input was dispatched.
+     Diagnosed as Chrome deprioritizing canvas repaints for a tab it
+     doesn't consider genuinely focused/foregrounded in this automation
+     context (a known class of headless/CDP-driven quirk), not an app
+     defect — real, focused, human-operated browser tabs don't throttle
+     `requestAnimationFrame` this way, and Playwright's own e2e suite
+     (which drives real mouse clicks throughout) never exhibited it.
+     Speculative fixes that didn't help (removed rather than left as dead
+     code): a `useEffect`-driven fit, a one-time forced re-render nudge.
+  6. **A real, load-dependent e2e flake, honestly documented, not hidden**:
+     because the starting rope is computed once on every page load (unlike
+     the old empty start, which triggered zero computation), running the
+     full e2e suite at this machine's full auto-detected worker count
+     (6) occasionally times out mid-`clickUntil` under heavy contention;
+     100% reliable at `--workers=1` or `--workers=2`, and in real CI
+     (`retries: 2` already configured). Not fixed by shrinking the rope —
+     that would trade away the actual feature for local test throughput —
+     flagged here as a known, accepted trade-off instead.
+  - **Verified**: `cargo test --workspace` (103 passed, 1 known failure —
+    the pre-existing mosaic residual, unrelated), `cargo test -p
+    crochet-wasm` (5/5, all passing after the preset-test rework), clippy/
+    fmt clean. `npm run lint`/`build` clean, `npm run test:unit` (46/46,
+    unaffected), `npm run test:e2e` (8/8 at `--workers=2`; viewer.spec.ts
+    and persistence.spec.ts both updated for the new default non-empty
+    starting state — see item 6 above for the one known parallel-load
+    caveat). Manually browser-verified: the starting rope renders as a
+    genuinely long, visibly bent/looped piece of yarn, correctly framed,
+    `Status: OK`; Clear reaches a true empty scene with nothing rendered.
+  - **Not yet done**: Owner's own visual sign-off (screenshots sent, not
+    yet reviewed as of this entry); commit/push/redeploy (everything
+    above is local-only, uncommitted, pending the Owner's go-ahead per the
+    standing escalation rule for anything leaving the workspace).
+
+### G-005 · Real yarn-weight/material-dependent physics calibration — DRAFT
+- **What:** A defined length/mass/time unit system for the relaxation
+  solver (currently positions are relative to a `dc` stitch's own height,
+  with no millimeter/second/gram mapping at all), real yarn friction in
+  contact handling (currently absent entirely), and stiffness constants
+  actually calibrated against measured yarn material properties instead of
+  the current "empirically stable, uncalibrated" values — so a stiffer
+  cotton `dc` swatch and a loose-spun acrylic one of the same stitch
+  pattern can genuinely relax/drape differently, which the model cannot
+  express today.
+- **Why:** Surfaced by G-004's rod-mechanics domain review
+  (`docs/rod-mechanics-reference.md`, findings 5 and 7): the current
+  topology-only elasticity model (D5) is a deliberate, consistent choice,
+  not a bug, but it structurally blocks any future yarn-weight-dependent
+  behavior. Owner (2026-09-07): wants real yarn-weight behavior
+  eventually — logged now rather than started, since it's a genuinely
+  bigger undertaking than a normal milestone (a unit-system decision has
+  to come before anything else here).
+- **Acceptance criteria:** Not yet defined — needs its own planning pass
+  (per `COMPANY/OPERATIONS.md` §2) once scheduled: at minimum, a real
+  yarn-weight parameter changes the relaxed shape in a physically
+  plausible, citable-against-`docs/rod-mechanics-reference.md` way, and
+  friction is present in contact handling where it matters.
+- **Constraints:** Depends on `docs/rod-mechanics-reference.md`'s finding
+  that no real yarn property can be meaningfully imported into a stiffness
+  constant until the unit-system question is resolved first — that's
+  necessarily M1 whenever this is planned. No deadline given; not
+  scheduled ahead of G-001/G-002/G-003's own open items.
+
+**Milestones**: not yet planned — see Acceptance criteria above.
+
+**Progress log** (newest first):
+- 2026-09-07 — goal created from G-004/M2's rod-mechanics review findings;
+  DRAFT, not yet planned or scheduled.
+
+## Completed
+
+### G-004 · Domain-grounding review: crochet construction + yarn/rod mechanics — DONE (2026-09-07)
+- **What:** An independent, cited review of the two real-world domains this
+  simulator depends on for correctness — (a) real crochet stitch
+  construction/terminology, and (b) yarn/fiber mechanics as modeled by the
+  Discrete Elastic Rod physics in `core/src/relax.rs` — checking what's
+  currently implemented against authoritative sources, not against "does it
+  look plausible."
+- **Why:** Owner observation (2026-09-07): several projects, this one most
+  visibly, lack enough domain expertise behind them and it shows as a lack
+  of depth. G-002's progress log is a real instance of the pattern this
+  targets — multiple rounds of "still doesn't read as real crochet" without
+  a crochet-construction source to check against. `docs/crochet-context.md`
+  itself already flags this: compiled from general convention, "not been
+  checked against a specific canonical... source," with edge cases marked
+  as needing "a real crochet-literate review." Separately, `relax.rs`'s
+  bending/barrier stiffness constants are documented as "empirically
+  stable" (tuned for solver behavior) rather than derived from real yarn
+  material properties — a second, distinct domain gap (rod/beam mechanics,
+  not crochet craft). This goal sets up the Company's new general-purpose
+  `domain-expert` subagent (see `COMPANY/STANDARDS.md` → "Domain depth")
+  and runs it against both gaps as the first real use of the pattern.
+- **Acceptance criteria:** A cited domain-reference doc exists for both
+  domains (crochet construction/terminology; yarn/rod mechanics), replacing
+  the "not checked against a canonical source" caveat with either a real
+  source or an honestly-labeled gap; concrete findings are triaged with the
+  Owner (fix now, log as a future goal, or accept as adequate stylization)
+  rather than left as an unactioned report.
+- **Constraints:** The `domain-expert` agent is advisory only — it does not
+  edit project files; JulAI reviews and applies anything worth acting on.
+  No deadline given.
+
+**Milestones:**
+- [x] M1 — Run `domain-expert` on the crochet-construction/terminology
+      domain: review `docs/crochet-context.md` and `core/src/yarn_shape.rs`
+      against real, cited crochet-construction sources (stitch anatomy,
+      loop-through-loop mechanics, standard terminology bodies). Produce a
+      cited reference doc and a tier-classified gap report.
+- [x] M2 — Run `domain-expert` on the yarn/fiber and rod-mechanics domain:
+      review `core/src/relax.rs`, `core/src/rod.rs`, and `core/src/ccd.rs`
+      against real Discrete Elastic Rod / rod-mechanics literature and real
+      yarn material properties (bending stiffness, twist, friction,
+      contact). Produce a cited reference doc and a tier-classified gap
+      report.
+- [x] M3 — Reconcile both reports with the Owner: save reference docs under
+      `docs/`, update `HANDOVER.md`'s decision record, and triage each
+      finding (immediate fix / new backlog goal / accepted as-is).
+
+**Progress log** (newest first):
+- 2026-09-07 — **M3 done, goal complete.** Owner triaged all three open
+  items:
+  1. **Chain "alternating orientation" claim — fixed.** `yarn_shape.rs`'s
+     `build_chain_curve_points` now uses a single fixed loop plane for the
+     real/rendered/validated geometry (matches real tensioned-chain
+     construction: flat, consistent orientation, per
+     `docs/crochet-construction-reference.md`). Found and fixed a real
+     regression along the way: the solver's *coarse contact proxy*
+     (`build_stitch_curve_points_coarse`, `relax.rs`'s per-step collision
+     force only) still needs a per-index plane variation — not as a
+     construction claim, but as the same kind of numerical
+     degeneracy-breaker as `geometry.rs`'s
+     `CHAIN_SYMMETRY_BREAK_AMPLITUDE` (raw-placed chain links start
+     near-collinear, so a fixed plane gave consecutive links' contact
+     loops a near-coincident starting bulge, which showed up as the
+     slip-stitch ring-closing test failing its join-tightness tolerance).
+     Kept the alternation *only* in the coarse contact path, honestly
+     documented as such. Full verification: `cargo test --workspace`
+     (103 passed, 1 pre-existing unrelated failure — the documented mosaic
+     residual, unchanged), `cargo test -p crochet-wasm` (5/5), clippy/fmt
+     clean.
+  2. **tr+/dtr+ post "twist" — resolved by direct visual check, fixed.**
+     Literature was genuinely split, so per the Owner's direction, looked
+     at real photos of correctly-worked treble crochet swatches (via
+     browser) rather than relying on text alone: a real post shows a
+     **consistent one-directional diagonal lean** the whole way up, never
+     an alternating left-right zigzag. `build_post_curve_points`'s
+     alternating `sign` per bar was the misconception; changed to a single
+     fixed direction for every bar. Verified with the same full test run
+     as above (same result: 103/1, clean clippy/fmt).
+  3. **Uncalibrated physics constants / no unit system / missing
+     friction — logged as a real future goal, not started now.** Owner
+     wants real yarn-weight-dependent behavior eventually. See `G-005`
+     (new, `DRAFT`) rather than doing this work now — it's a genuinely
+     bigger undertaking (a length/mass/time unit system has to exist
+     before any real yarn property can be imported into a stiffness
+     constant, per `docs/rod-mechanics-reference.md` finding 5).
+  See `HANDOVER.md` D14 for the consolidated decision-record entry.
+- 2026-09-07 — **M2 done.** The DER bending math (`rod.rs`'s curvature
+  binormal) is a correct, literal instance of the published method (Bergou
+  et al. 2008), and the contact barrier formula is mathematically the same
+  shape as real IPC (Li et al. 2020) — both grounded, not invented. The
+  headline finding: `BENDING_STIFFNESS`/`CONTINUITY_STIFFNESS`/
+  `BARRIER_STIFFNESS`/`insertion_stiffness()` are uncalibrated against real
+  yarn (already disclosed honestly in-code) — but this is **not fixable as
+  stated**, because the solver has no absolute length/mass/time unit system
+  at all (positions are relative to a `dc` stitch's own height, not
+  millimeters), so there is no meaningful way to compare a constant like
+  `0.2` to a real yarn's measured bending rigidity yet. Given the project's
+  existing D5 decision (elasticity derives from stitch topology, not a yarn
+  material parameter), this is a **deliberate, consistent architectural
+  choice**, not an oversight — it only becomes a real gap if a future goal
+  wants yarn-weight-dependent draping, which the current model structurally
+  can't express. Two other real gaps found: friction is entirely absent
+  from contact handling (no `friction` match anywhere in `core/src` —
+  defensible for a static rest-shape relaxation, would matter for future
+  load-bearing/dynamic features), and twist is deferred (Bishop-frame code
+  exists and is unit-tested in `rod.rs` but never called from `relax.rs` —
+  already honestly staged, relevant for a future "chains curl realistically"
+  feature). Saved to `docs/rod-mechanics-reference.md`. Proceeding to M3
+  (Owner triage) alongside M1's findings.
+- 2026-09-07 — **M1 done.** Terminology and per-stitch construction
+  mechanics (incl. `quad tr`) check out solidly against multiple
+  independent crochet-technique sources — no changes needed there. Three
+  real gaps found, saved to `docs/crochet-construction-reference.md`:
+  (1) `yarn_shape.rs`'s claim that chain links "alternate orientation like
+  a keychain" (lines 114–121) appears to be an invented, unsourced mental
+  model — real tensioned chain is flat/ribbon-like with consistent
+  orientation; likely carried over from the pre-D11 rendering-layer era.
+  (2) The alternating left/right "twist" on tr+ posts (lines 154–163, 195)
+  is the highest-value open question — sources genuinely disagree on
+  whether a twisted post is a real feature of correct construction or a
+  documented sign of a *technique error*; unresolved by literature search
+  alone, needs a human crochet-literate check or a real swatch comparison.
+  (3) Tuned numeric constants (65° chain gap angle, 0.82 bar-span fraction,
+  §5a's capacity thresholds) remain uncited as expected — no craft
+  literature quantifies these — and stay honestly labeled as approximations
+  rather than hardened rules. `bar_count=2` for htr was already
+  self-disclosed in code as decorative, not a construction fact — no action
+  needed beyond the existing disclosure. Holding items (1) and (2) for
+  Owner triage at M3, alongside M2's findings.
+- 2026-09-07 — goal created; `domain-expert` subagent and
+  `COMPANY/STANDARDS.md` "Domain depth" section set up as the reusable
+  mechanism (Owner: expects more than one project to need this kind of
+  depth, in topics that rarely repeat, so built as an on-demand pattern
+  rather than a fixed team). Proceeding to M1/M2.

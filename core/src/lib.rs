@@ -14,3 +14,4 @@ pub mod rod;
 pub mod stitch;
 pub mod validate;
 pub mod vec3;
+pub mod yarn_shape;
