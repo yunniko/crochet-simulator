@@ -557,12 +557,22 @@ struct CollisionUnit {
 /// other. Generous on purpose — a false *pass* here just means running
 /// the real check on a pair that turns out not to matter (a performance
 /// cost, not a correctness one); a false *skip* would silently miss a
-/// real collision, which this margin is sized well clear of: comfortably
-/// above `BARRIER_ACTIVE_DISTANCE` plus twice the largest loop's own
-/// reach (a chain's — `crate::yarn_shape`'s `CHAIN_HALF_GAP` geometry
-/// keeps that well under 0.6 for the raw ~1.0-unit step size this
-/// project's schemes use).
-const BARRIER_BROAD_PHASE_MARGIN: f64 = 1.8;
+/// real collision, which this margin must be sized well clear of.
+///
+/// **Corrected 2026-09-08** (domain-expert review): the previous value
+/// (1.8) was justified by a claim that a chain loop's own sideways reach
+/// stays "well under 0.6" — that was never actually checked against
+/// `crate::yarn_shape`'s real geometry, and after fixing `loop_arc_points`'
+/// sweep-direction bug the real reach is `radius * (1 + cos(half_gap))` =
+/// ~0.785 for the default 65-degree `CHAIN_HALF_GAP` and a ~1.0-unit raw
+/// step. The sound requirement is `margin >= BARRIER_ACTIVE_DISTANCE +
+/// reach_a + reach_b` = `0.3 + 0.785 + 0.785` ~= 1.87 — the old 1.8 could
+/// silently skip a genuinely-contacting chain-chain pair, exactly the
+/// failure mode this margin exists to prevent (confirmed: two barrier
+/// tests started missing real tunnelling/overlap once the sweep bug was
+/// fixed and the loop's true reach became relevant). Rounded up with
+/// headroom rather than shaving it to the exact bound.
+const BARRIER_BROAD_PHASE_MARGIN: f64 = 2.0;
 
 /// This unit's real, current shape — a stitch's own loop-through-loop
 /// curve (`crate::yarn_shape`, at reduced resolution: see
@@ -583,12 +593,7 @@ fn unit_current_points(
         UnitKind::Stitch(r) => {
             let base_val = endpoint_value(&Endpoint::Base(r), positions, base_sources);
             let top_val = endpoint_value(&Endpoint::Top(r), positions, base_sources);
-            crate::yarn_shape::build_stitch_curve_points_coarse(
-                base_val,
-                top_val,
-                &stitch_defs[&r],
-                r.index,
-            )
+            crate::yarn_shape::build_stitch_curve_points_coarse(base_val, top_val, &stitch_defs[&r])
         }
         UnitKind::Bridge(from, to) => {
             let from_val = endpoint_value(&Endpoint::Top(from), positions, base_sources);
@@ -1619,7 +1624,25 @@ mod barrier_contact_tests {
         // still deferred, docs §4a); pinned off to the side, clear of
         // either dc's own ~1.0 insertion-spring radius, so it can't
         // distort either one.
-        pinned.insert(ref_at(0, 2), Vec3::new(anchor_distance / 2.0, 1.5, 0.0));
+        //
+        // **Re-verified 2026-09-08** after fixing `yarn_shape.rs`'s
+        // `loop_arc_points` sweep-direction bug: the buffer is itself a
+        // `ch` with no target, so its own raw "step" (buffer -> anchor B)
+        // is a single chain link's loop spanning whatever distance
+        // separates them — and a chain loop's sideways reach scales with
+        // that distance (`~0.785 * height`, `CHAIN_HALF_GAP`'s doc
+        // comment). The original 1.5 y-offset made that step ~1.63 units
+        // long, giving the buffer's *own* loop a ~1.28-unit reach that
+        // genuinely swung into "free A"'s resting position once the loop
+        // shape was corrected to its real (larger, previously
+        // chord-truncated) extent — a real new collision, not a flaky
+        // test. 1.0 keeps the buffer->anchor-B step close to this
+        // project's typical ~1.0-unit stitch spacing (matching the
+        // existing "~1.0 insertion-spring radius" assumption this comment
+        // already relies on) so the buffer's own loop stays clear too;
+        // confirmed by sweeping 0.3-1.2 and checking both barrier tests
+        // in this module.
+        pinned.insert(ref_at(0, 2), Vec3::new(anchor_distance / 2.0, 1.0, 0.0));
         pinned.insert(ref_at(0, 3), Vec3::new(anchor_distance, 0.0, 0.0));
         let params = RelaxationParams {
             pinned,

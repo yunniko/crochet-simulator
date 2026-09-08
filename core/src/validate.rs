@@ -464,6 +464,44 @@ mod tests {
         }
     }
 
+    /// Regression test for the app's actual default starting scene
+    /// (`web/lib/starting-rope.ts`: 24 `ch` closed into a ring via one
+    /// `ss` back to link 0, plus a 6-`ch` free tail) — added 2026-09-08
+    /// after this exact scheme failed validation (`Stitch(10)` vs.
+    /// `Stitch(23)`, distance 0.134) once a chain-plane construction fix
+    /// briefly surfaced `yarn_shape.rs`'s `loop_arc_points` sweep-
+    /// direction bug (see that function's own doc comment). Per
+    /// `web/AGENTS.md`'s own standing note: a demo/default scheme's test
+    /// coverage gap in M5 let a genuinely self-intersecting scheme pass
+    /// while rendering "Flagged" in the browser — this asserts `ok`
+    /// explicitly rather than just structure, specifically for the one
+    /// scheme every user sees on first load.
+    #[test]
+    fn starting_rope_scheme_validates_cleanly() {
+        let registry = crate::stitch::StitchRegistry::with_uk_basics();
+        let mut thread = Thread::new();
+        for _ in 0..24 {
+            thread.stitches.push(StitchInstance::new(CH, vec![]));
+        }
+        thread.stitches.push(StitchInstance::new(
+            crate::stitch::SS,
+            vec![StitchRef::new(0, 0)],
+        ));
+        for _ in 0..6 {
+            thread.stitches.push(StitchInstance::new(CH, vec![]));
+        }
+        let mut scheme = Scheme::new();
+        scheme.add_thread(thread);
+
+        let relaxed = relax_scheme(&scheme, &registry, &RelaxationParams::default()).unwrap();
+        let report = validate_scheme(&scheme, &registry, &relaxed, DEFAULT_YARN_DIAMETER).unwrap();
+        assert!(
+            report.ok,
+            "starting-rope scheme should validate cleanly: {:#?}",
+            report.violations
+        );
+    }
+
     #[test]
     fn ordinary_swatch_has_no_self_intersections() {
         let registry = crate::stitch::StitchRegistry::with_uk_basics();

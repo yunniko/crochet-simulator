@@ -1981,6 +1981,96 @@ Outcome of the three items put to the Owner:
    yarn property can be imported into a stiffness constant — a bigger,
    separately-planned undertaking, not a quick fix alongside this one.
 
+**D15 — `loop_arc_points`' sweep-direction bug found and fixed: every
+chain link and post loop had a spurious straight chord, not a real
+near-closed loop, since M14 shipped (2026-09-08, domain-expert review +
+independent verification).** Owner reviewed the M14 rewrite live on
+production: "a very little closer... not there yet," and asked to keep
+iterating with the `domain-expert` agent until the result reads as real
+crochet. First hypothesis (frame inconsistency along a curving chain,
+needing `rod.rs`'s unused Bishop-frame/parallel-transport machinery) was
+sent to the domain-expert for review — its answer correctly refused to
+accept the premise unverified, worked out that the existing ad-hoc frame
+and a true Bishop frame are *identical* for a planar ring (which this
+scheme's raw placement actually produces), and instead hand-derived the
+real cause: `yarn_shape.rs`'s `loop_arc_points` sweeps `start_angle +
+sweep`, landing at +75° for the default 65° half-gap — but the second
+required endpoint is at -25°. The arc never closes; the function's own
+`points[samples] = (local_height, 0.0)` override was silently patching a
+broken shape by teleporting the last sample back to the correct endpoint,
+inserting a straight ~0.845h chord across roughly a third of every loop's
+own length. Independently hand-verified the trig before touching any code
+(both endpoint angles, both sweep directions, by hand). Fix: `start_angle
+- sweep * t` instead of `+` — one sign, confirmed analytically exact at
+t=1, confirmed by a dramatic visual change in the local dev server (the
+default starting rope went from having a visible extra straight slash
+through each link to genuinely clean, smooth, consistently-oriented near-
+closed loops).
+
+Fixing it surfaced three follow-on issues, all resolved in the same pass:
+1. **The previous session's "coarse-contact-only chain-plane alternation"
+   was an unnecessary hack**, not a real fix — it was band-aiding this
+   same sweep bug's side effects (a distorted contact/collision proxy),
+   not the "consecutive raw-near-collinear links read as overlap"
+   degeneracy it was written to describe. Confirmed by reverting it
+   entirely (`build_chain_curve_points`/`build_stitch_curve_points_coarse`
+   back to one consistent plane, no `stitch_index` parameter anywhere) and
+   re-running the regression test it was added for
+   (`slip_stitch_join_closes_a_chain_into_a_genuine_non_intersecting_ring`)
+   — it still passes, unaided, once the real bug is fixed. This also
+   resolved a genuine correctness bug the domain-expert flagged
+   independently: the coarse (solver) and fine (validated/rendered)
+   geometry used to disagree by 90° for odd-indexed chain links, meaning
+   the physics was avoiding collisions in a shape nothing ever validated
+   or rendered.
+2. **`BARRIER_BROAD_PHASE_MARGIN` was justified by an unverified claim**
+   ("chain loop reach stays well under 0.6") that the domain-expert
+   checked and found false — the real reach is ~0.785 for the default
+   geometry (now exact, previously subtly wrong due to the same sweep
+   bug). Bumped 1.8 -> 2.0 with the real derivation in its own doc
+   comment; two barrier tests that started failing once the true reach
+   became relevant (`two_independent_stitches_pinned_close_together_
+   no_longer_collide`, `barrier_prevents_tunnelling_not_just_final_
+   overlap`) needed a further, separate fix (item 3) beyond this margin
+   bump alone.
+3. **A barrier test's own adversarial setup produced an oversized,
+   unintended chain loop.** `two_independent_stitches_pinned_apart`'s
+   "buffer" stitch (a spacer `ch`, meant only to stop a continuity edge
+   landing directly on the far pinned point) was placed far enough away
+   (y=1.5) that the buffer-to-far-pin "step" became a ~1.63-unit chain
+   link — and a chain loop's reach scales with its own length, so its
+   bulge (~1.28 units once corrected) genuinely swung into the unrelated
+   `dc`'s resting position. Not a solver bug: a test fixture whose
+   geometry assumption ("clear of either dc's ~1.0 insertion-spring
+   radius") didn't account for the buffer's *own* loop once that loop's
+   real extent was no longer being silently truncated. Fixed by moving
+   the buffer to y=1.0 (swept 0.3-1.2, documented in the constant's own
+   comment), keeping its own implied step close to this project's typical
+   ~1.0-unit spacing.
+4. **Bonus**: the M12-era "mosaic residual" test failure
+   (`mosaic_style_back_loop_row_with_front_loop_spike_does_not_false_
+   positive`), on record as a known, accepted failure since M12, now
+   passes — a side effect of the corrected geometry, not separately
+   chased.
+
+Two further constant retunes were needed purely because the corrected
+loop shapes are (very slightly) larger than the bug had silently
+truncated them to: `BAR_SPAN_START` 0.82 -> 0.83 (the Owner-calibrated "7
+dc's into one target is hard but possible" boundary was missing by 0.1457
+vs. a 0.15 threshold — checked 0.82-0.86, took the smallest value that
+restores it) and two `yarn_shape.rs` unit-test length thresholds
+(`> 2.5` -> `> 2.0`/`> 2.3`, since the corrected — shorter, because no
+longer chord-inflated — arc lengths are ~2.21/~2.48 respectively; the
+*old* thresholds were calibrated against the bug's own incorrect, longer
+shape).
+
+**Status**: fixed, tested (`cargo test --workspace` 105/105, `cargo test
+-p crochet-wasm` 5/5, clippy/fmt clean), WASM bindings rebuilt, manually
+verified in the local dev server. **Not yet redeployed** as of this entry
+— pending the Owner's decision on whether to push this round out now (see
+`GOALS.md` G-002's progress log for the fuller narrative and the standing
+"not claiming done, only that the dominant defect is understood" caveat).
+
 ## Milestone re-plan pending (2026-08-24)
 
 D4/D5/D6/D7 above change the shape of the milestone plan from what was
@@ -1998,6 +2088,20 @@ the Owner's GitHub account (`12hv89@gmail.com`) — every future commit,
 in any project, will hit GitHub's email-privacy push rejection until the
 Owner fixes one side or the other (see the M6 deploy account above for
 the full story). Not JulAI's to change unilaterally.
+
+**Worked around once, 2026-09-07, without touching git config**: hit this
+exact rejection pushing G-004's commit. Tried `info@julienika.cz`
+(Owner-suggested, guessing from the `julai-new-vhost` script's certbot
+contact address) — also rejected, not actually verified on the GitHub
+account. What worked: the account's GitHub-noreply address
+(`29886186+yunniko@users.noreply.github.com`, the same one already used
+for `arfid-meals`' commits) — but note it must be set on **both**
+`--author` and `GIT_COMMITTER_EMAIL`/`GIT_COMMITTER_NAME`; amending just
+`--author` still leaves the committer field at the unverified global
+config email and GitHub rejects on that alone. This was a per-commit
+`git commit --amend` with env vars, not a config change, and only touched
+a not-yet-pushed commit. For a future project's first push hitting this,
+skip straight to the noreply address rather than re-guessing.
 
 Resolved: whether saved schemes need user accounts — see the access-model
 decision above (no accounts, unguessable links), 2026-08-25. Resolved:

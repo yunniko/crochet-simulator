@@ -935,6 +935,47 @@ sign-off before M1 starts):
       given as of the last progress-log entry.
 
 **Progress log** (newest first):
+- 2026-09-08 — **M2 continued — a real, foundational geometry bug found
+  and fixed, not just another visual iteration.** Owner reviewed the
+  deployed M14 rewrite on production: "It got a very little closer to
+  what it should be" — not there yet. Owner asked to keep working with
+  the `domain-expert` agent until it reads as real crochet. That review
+  found something well beyond a construction-detail nitpick:
+  `yarn_shape.rs`'s `loop_arc_points` — the shared primitive behind
+  *every* chain link and post loop in the whole project — swept its arc
+  in the wrong direction. It never actually closed the loop the doc
+  comment describes; it drew a partial arc, then silently jumped via a
+  hard-coded override to a straight chord covering roughly a third of the
+  shape. Every stitch rendered since M14 shipped has had this: hand-
+  verified independently (the endpoint math landed at +75° instead of the
+  required -25°) before touching any code. One sign fix in
+  `loop_arc_points`, confirmed by a dramatic visual change locally — the
+  starting rope now shows genuinely clean, smooth near-closed loops with
+  no jarring straight slash cutting through them (screenshots not
+  attached here; verify live). Also, while investigating: the earlier
+  session's "coarse-contact-only chain-plane alternation" (added to fix a
+  regression when this same fix was first attempted) turned out to be an
+  unnecessary hack layered on top of this same bug — reverted back to one
+  consistent plane everywhere once the real cause was fixed, confirmed by
+  the same regression test still passing. Two small, honest constant
+  retunes followed directly from the corrected geometry (`BARRIER_BROAD_
+  PHASE_MARGIN` 1.8->2.0, `BAR_SPAN_START` 0.82->0.83 — both because the
+  corrected loop shapes are very slightly larger than the bug had been
+  silently truncating them to) plus a test-geometry fix (a barrier test's
+  adversarial "buffer" stitch was inadvertently creating an oversized
+  stretched chain loop once the shape was corrected). One pre-existing,
+  previously-accepted test failure (the "mosaic residual," on record since
+  M12) is now genuinely fixed as a side effect, not just tolerated.
+  **Verified**: `cargo test --workspace` 105/105 (up from 103 passed + 1
+  accepted failure), `cargo test -p crochet-wasm` 5/5, clippy/fmt clean,
+  WASM bindings rebuilt, manually browser-verified locally (not yet
+  redeployed — see HANDOVER.md D15 for the full account and
+  `docs/rod-mechanics-reference.md`-style domain-expert findings this
+  round didn't get their own doc, logged directly in D15 instead since
+  they're code-level, not new domain facts). Owner's own fresh visual
+  review, on production, is still the actual acceptance bar — not
+  claiming this is "done," only that the dominant defect is now
+  understood and fixed rather than papered over again.
 - 2026-08-30 — **M2 — real loop-topology core rewrite + flat-disc growth-
   axis fix, technical work complete and fully verified; Owner review of
   the final result still pending.** A long, several-stage arc from the
@@ -1105,6 +1146,24 @@ sign-off before M1 starts):
       JulAI's own assessment alone.
 
 **Progress log** (newest first):
+- 2026-09-07 — **Committed, pushed, and redeployed** (Owner-directed:
+  "proceed to deploy, I'll look on production"). Bundled together with
+  G-004's fixes and the pending M13/M14 work in one commit (`ca3b8bb`,
+  after two email-privacy-rejected push attempts — GitHub required a
+  verified author/committer email; resolved by amending both to the
+  account's GitHub noreply address per Owner instruction, no git config
+  changed). Redeployed via the standard recipe
+  (`INFRASTRUCTURE_DEPLOY.md`): `git fetch`/`pull` clean, `docker compose
+  --profile app up -d --build` succeeded, only `crochet-simulator-app-1`
+  restarted (confirmed via `docker ps` before/after — every other
+  container's uptime unchanged, no collision). Smoke-tested live at
+  `https://crochet.app.craftodejnice.cz`: page loads, no console errors,
+  the starting rope renders as real loop-topology geometry (31 stitches,
+  `Status: OK`) after the known Chrome-automation canvas-repaint quirk
+  (HANDOVER.md's M13 entry) resolved on the first real click. This is a
+  smoke test only, not the Owner's own detailed visual review — that's
+  still the open item below, and the Owner is doing it directly on
+  production this time rather than from screenshots.
 - 2026-08-30 — **M1 — presets removed, real starting rope added, technical
   work complete.**
   1. **Presets removed entirely**: `web/lib/presets.ts` deleted; the

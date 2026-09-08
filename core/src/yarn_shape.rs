@@ -76,9 +76,21 @@ fn loop_arc_points(local_height: f64, half_gap: f64, samples: usize) -> Vec<(f64
     let start_angle = -std::f64::consts::FRAC_PI_2 - half_gap;
     let sweep = 2.0 * std::f64::consts::PI - 2.0 * half_gap;
 
+    // **Corrected 2026-09-08** (domain-expert review, independently hand-
+    // verified): the two endpoints sit at angles `-PI/2 -+ half_gap`
+    // around the circle: -155 deg/-25 deg deg for the default 65 deg
+    // half-gap. "The long way" between them (through the *top* of the
+    // circle, per this function's own doc comment) from -155 deg is
+    // reached by *subtracting* the 230 deg sweep (landing at -25 deg,
+    // exactly the second endpoint), not adding it (which overshoots to
+    // +75 deg — nowhere near the required endpoint). The old `+` here
+    // silently produced a real arc plus a long straight chord back to a
+    // hard-coded final point (points[samples] below), not a near-closed
+    // loop at all: every chain link and post loop has had a spurious
+    // straight slash cutting across roughly a third of its own shape.
     let mut points: Vec<(f64, f64)> = (0..=samples)
         .map(|i| {
-            let angle = start_angle + sweep * (i as f64 / samples as f64);
+            let angle = start_angle - sweep * (i as f64 / samples as f64);
             (
                 center_along + radius * angle.cos(),
                 center_side + radius * angle.sin(),
@@ -126,23 +138,23 @@ fn place_loop(
 /// rendered nearly edge-on and made links hard to click in the web
 /// prototype this was ported from.
 ///
-/// The *coarse contact proxy* (`build_stitch_curve_points_coarse`, used
-/// only internally by `relax.rs`'s per-step collision force — never the
-/// judged/rendered geometry) still varies this plane by `stitch_index`
-/// parity, via `contact_symmetry_break` below. That is **not** a
-/// reinstatement of the debunked construction claim — it's the same kind
-/// of numerical degeneracy-breaker as `geometry.rs`'s
-/// `CHAIN_SYMMETRY_BREAK_AMPLITUDE`. Raw placement lays consecutive `ch`
-/// stitches along a near-straight line, so every link's own `forward`
-/// starts out nearly identical; a fixed plane would then give consecutive
-/// links' coarse contact loops a nearly-coincident starting bulge, which
-/// the barrier contact force reads as overlap and pushes apart with noisy
-/// early-step forces — confirmed by a real regression (removing the
-/// alternation entirely dropped the slip-stitch ring-closing test's join
-/// tightness below its tolerance; see that test's own comment in
-/// `relax.rs`). Alternating breaks that only where it's actually needed:
-/// the solver's own transient contact proxy, not the shape anything gets
-/// judged or rendered against.
+/// **Revised 2026-09-08**: an earlier version of this fix kept a
+/// `stitch_index`-based plane alternation in the *coarse contact proxy*
+/// only (`build_stitch_curve_points_coarse`), reasoning it was needed to
+/// stop consecutive chain links' near-identical raw starting bulges from
+/// reading as spurious overlap. That reasoning didn't hold up: `relax.rs`
+/// already exempts structurally-adjacent unit pairs (shared raw endpoint)
+/// from barrier contact entirely (see its own `unit_pairs` construction),
+/// so two consecutive same-thread chain links never get a contact force
+/// computed between them regardless of their coarse geometry — the
+/// alternation was solving a problem that didn't exist there. The actual
+/// cause of the regression that prompted it was `loop_arc_points`' sweep-
+/// direction bug (see that function's own doc comment): every chain
+/// link's coarse *and* fine geometry had a spurious straight chord
+/// distorting both the barrier contact force and the final validated
+/// shape. With that fixed, the coarse and fine paths use one identical,
+/// consistent plane again — no index-dependent divergence between what
+/// the solver optimizes and what gets judged/rendered.
 const CHAIN_HALF_GAP: f64 = 65.0 * std::f64::consts::PI / 180.0;
 const CHAIN_LOOP_SAMPLES: usize = 24;
 /// M15: relaxation's per-step contact force (`relax.rs`) needs each
@@ -156,22 +168,10 @@ const CHAIN_LOOP_SAMPLES: usize = 24;
 /// judged for correctness.
 const CHAIN_LOOP_SAMPLES_COARSE: usize = 8;
 
-fn build_chain_curve_points(
-    base: Vec3,
-    top: Vec3,
-    height: f64,
-    contact_symmetry_break: Option<usize>,
-    samples: usize,
-) -> Vec<Vec3> {
+fn build_chain_curve_points(base: Vec3, top: Vec3, height: f64, samples: usize) -> Vec<Vec3> {
     let forward = (top - base) * (1.0 / height);
     let (right, up) = perpendicular_frame(forward);
-    let plane_a = (up + right).normalized();
-    let axis = match contact_symmetry_break {
-        // See CHAIN_HALF_GAP's doc comment: contact-proxy-only degeneracy
-        // breaker, not a claim about real yarn orientation.
-        Some(seed) if !seed.is_multiple_of(2) => (up - right).normalized(),
-        _ => plane_a,
-    };
+    let axis = (up + right).normalized();
     place_loop(base, forward, axis, 1.0, height, CHAIN_HALF_GAP, samples)
 }
 
@@ -211,7 +211,16 @@ fn build_chain_curve_points(
 /// stitch's own internal loop is a stitch-scale detail, not something
 /// that should compete for space with the next stitch over.
 const POST_HALF_GAP: f64 = 60.0 * std::f64::consts::PI / 180.0;
-const BAR_SPAN_START: f64 = 0.82;
+/// **Re-tuned 2026-09-08** (0.82 -> 0.83) after fixing `loop_arc_points`'
+/// sweep-direction bug: that fix made every post loop's real sideways
+/// reach very slightly larger (it had been silently truncated by the
+/// same bug this constant was originally tuned against), which pushed
+/// the calibrated "7 dc's into one target is hard but possible" case
+/// (`validate.rs`'s `capacity_calibrated_shell_sizes_validate_as_expected`)
+/// just barely (0.1457 vs. a 0.15 threshold) into a false self-
+/// intersection. Bumped by the smallest amount (checked 0.82-0.86) that
+/// restores the Owner-confirmed 7-fits/11-doesn't boundary.
+const BAR_SPAN_START: f64 = 0.83;
 const POST_LOOP_SAMPLES: usize = 14;
 /// See `CHAIN_LOOP_SAMPLES_COARSE`'s doc comment — same reasoning, for posts.
 const POST_LOOP_SAMPLES_COARSE: usize = 5;
@@ -291,14 +300,7 @@ pub fn bar_count(def: &StitchDef) -> u32 {
 /// [`build_stitch_curve_points_coarse`] instead (same shape, far fewer
 /// samples — see that function's own doc comment).
 pub fn build_stitch_curve_points(base: Vec3, top: Vec3, def: &StitchDef) -> Vec<Vec3> {
-    build_stitch_curve_points_with_samples(
-        base,
-        top,
-        def,
-        None,
-        CHAIN_LOOP_SAMPLES,
-        POST_LOOP_SAMPLES,
-    )
+    build_stitch_curve_points_with_samples(base, top, def, CHAIN_LOOP_SAMPLES, POST_LOOP_SAMPLES)
 }
 
 /// Same real-loop-topology curve as [`build_stitch_curve_points`], at
@@ -307,20 +309,14 @@ pub fn build_stitch_curve_points(base: Vec3, top: Vec3, def: &StitchDef) -> Vec<
 /// each relaxation step; resolution enters that cost quadratically, so
 /// this exists specifically to keep `relax_scheme` fast while the shape
 /// is still real enough for the contact force to actually mean something
-/// (not just a coarse bounding capsule). `stitch_index` only feeds the
-/// chain contact-symmetry-breaker (`CHAIN_HALF_GAP`'s doc comment) —
-/// ignored for every other stitch kind.
-pub fn build_stitch_curve_points_coarse(
-    base: Vec3,
-    top: Vec3,
-    def: &StitchDef,
-    stitch_index: usize,
-) -> Vec<Vec3> {
+/// (not just a coarse bounding capsule). Identical geometry to the full-
+/// resolution version otherwise — see `CHAIN_HALF_GAP`'s doc comment on
+/// why there's no per-stitch index/divergence between the two anymore.
+pub fn build_stitch_curve_points_coarse(base: Vec3, top: Vec3, def: &StitchDef) -> Vec<Vec3> {
     build_stitch_curve_points_with_samples(
         base,
         top,
         def,
-        Some(stitch_index),
         CHAIN_LOOP_SAMPLES_COARSE,
         POST_LOOP_SAMPLES_COARSE,
     )
@@ -330,7 +326,6 @@ fn build_stitch_curve_points_with_samples(
     base: Vec3,
     top: Vec3,
     def: &StitchDef,
-    chain_contact_symmetry_break: Option<usize>,
     chain_samples: usize,
     post_samples_per_bar: usize,
 ) -> Vec<Vec3> {
@@ -339,13 +334,7 @@ fn build_stitch_curve_points_with_samples(
         return vec![base];
     }
     if def.lays_out_as_line {
-        return build_chain_curve_points(
-            base,
-            top,
-            height,
-            chain_contact_symmetry_break,
-            chain_samples,
-        );
+        return build_chain_curve_points(base, top, height, chain_samples);
     }
     let bars = bar_count(def);
     if bars == 0 {
@@ -410,7 +399,14 @@ mod tests {
         let top = Vec3::new(1.0, 0.0, 0.0);
         let d = def(&reg, CH);
         let points = build_stitch_curve_points(base, top, &d);
-        assert!(path_length(&points) > 2.5);
+        // Corrected 2026-09-08 (loop_arc_points sweep-direction fix): the
+        // real arc length is `radius * sweep` = ~2.21 for the default
+        // 65-degree half-gap and a 1.0-unit step (previously masked by a
+        // spurious straight chord that inflated this to ~3.06 — see that
+        // function's own doc comment). 2.0 stays safely below the real
+        // value while still well above a straight line (1.0) or a gentle
+        // bend (which wouldn't clear much past that).
+        assert!(path_length(&points) > 2.0);
     }
 
     /// Corrected 2026-09-07 (see `docs/crochet-construction-reference.md`,
@@ -452,8 +448,11 @@ mod tests {
         // Straight-line distance is 2.0; a real loop (even the tighter,
         // M14-retuned kind — see `POST_HALF_GAP`/`BAR_SPAN_START`'s own
         // doc comment on why these shrank) still has to travel further
-        // than that.
-        assert!(path_length(&points) > 2.5);
+        // than that. Corrected 2026-09-08 (loop_arc_points sweep-direction
+        // fix): the real total is ~2.48 (1.66 straight shaft + two ~0.41
+        // bar arcs) — 2.3 stays safely below that while still clearly more
+        // than a straight line or gentle bend.
+        assert!(path_length(&points) > 2.3);
     }
 
     #[test]
